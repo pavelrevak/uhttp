@@ -448,10 +448,11 @@ class HttpServer():
             address: internet address or IP for listening port
             port: TCP port for HTTP
         """
-        self._server = socket.socket()
-        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._server.bind((address, port))
-        self._server.listen(1)
+        self._socket = socket.socket()
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind((address, port))
+        self._socket.listen(1)
+        self._waiting_clients = []
 
     @property
     def socket(self):
@@ -460,7 +461,7 @@ class HttpServer():
         Returns:
             client socket
         """
-        return self._server
+        return self._socket
 
     def accept(self):
         """Accept new connection from client
@@ -468,8 +469,11 @@ class HttpServer():
         Returns:
             instance of client or None on error
         """
-        cl_socket, addr = self._server.accept()
+        cl_socket, addr = self._socket.accept()
         client = HttpClient(cl_socket, addr)
+        self._waiting_clients.append(client)
+
+    def client_process(self, client):
         try:
             client.read_request()
         except UHttpError as err:
@@ -477,6 +481,7 @@ class HttpServer():
             del client
             client = None
             gc.collect()
+        self._waiting_clients.remove(client)
         return client
 
     def wait(self, timeout=1):
@@ -488,7 +493,12 @@ class HttpServer():
         Returns:
             None or talk_client result
         """
-        read_event = select.select([self._server], [], [], timeout)[0]
-        if read_event:
-            return self.accept()
+        read_sockets = [client.socket for client in self._waiting_clients]
+        read_sockets.append(self._socket)
+        read_event = select.select(read_sockets, [], [], timeout)[0]
+        if self._socket in read_event:
+            self.accept()
+        for client in self._waiting_clients:
+            if client.socket in read_event:
+                return self.client_process(client)
         return None
