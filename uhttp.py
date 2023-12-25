@@ -1,14 +1,84 @@
 """uHttp - Micro Http Server
 """
 
+import time
 import socket
 import select
 import gc
 import json
 
 
+MAX_HEADERS_LENGTH = 4096
+MAX_CONTENT_LENGTH = 65536
+HEADERS_DELIMITERS = (b'\n\r\n', b'\n\n')
+CONTENT_LENGTH = 'content-length'
+CONTENT_TYPE = 'content-type'
+CONTENT_DISPOSITION = 'content-disposition'
+CONTENT_TYPE_XFORMDATA = 'application/x-www-form-urlencoded'
+CONTENT_TYPE_HTML_UTF8 = 'text/html;charset=UTF-8'
+CONTENT_TYPE_JSON = 'application/json'
+CONTENT_TYPE_OCTET_STREAM = 'application/octet-stream'
+CACHE_CONTROL = 'cache-control'
+CACHE_CONTROL_NO_CACHE = 'no-cache'
+LOCATION = 'Location'
+CONNECTION = 'connection'
+CONNECTION_CLOSE = 'close'
+HOST = 'host'
+METHODS = (
+    'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST',
+    'PUT', 'TRACE')
+PROTOCOLS = ('HTTP/1.0', 'HTTP/1.1')
+STATUS_CODES = {
+    100: "Continue",
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    204: "No Content",
+    205: "Reset Content",
+    206: "Partial Content",
+    300: "Multiple Choices",
+    301: "Moved Permanently",
+    302: "Found",
+    303: "See Other",
+    304: "Not Modified",
+    307: "Temporary Redirect",
+    308: "Permanent Redirect",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    406: "Not Acceptable",
+    408: "Request Timeout",
+    411: "Length Required",
+    413: "Payload Too Large",
+    414: "URI Too Long",
+    415: "Unsupported Media Type",
+    416: "Range Not Satisfiable",
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    507: "Insufficient Storage",
+}
+
+
 class UHttpError(Exception):
     """uHttp error"""
+
+
+class UHttpDisconnected(UHttpError):
+    """uHttp error"""
+
+
+class UHttpErrorResponse(UHttpError):
+    """uHttp errpr with result"""
+
+    def __init__(self, status=500, message=None):
+        super().__init__(f"{status} {STATUS_CODES[status]}: {message}")
+        self._status = status
+
+    @property
+    def status(self):
+        return self._status
 
 
 def decode_percent_encoding(data):
@@ -76,7 +146,8 @@ def parse_query(raw_query, query=None):
                     key = decode_percent_encoding(query_part).decode('utf-8')
                     val = None
             except UnicodeError as err:
-                raise UHttpError(f"Bad query encoding: {query_part} ({err})") from err
+                raise UHttpErrorResponse(
+                    400, f"Bad query encoding: {query_part} ({err})") from err
             if key not in query:
                 query[key] = val
             elif isinstance(query[key], list):
@@ -105,71 +176,57 @@ def parse_url(url):
     return path, query
 
 
+def parse_header_line(line):
+    try:
+        line = line.decode('ascii')
+    except UnicodeError as err:
+        raise UHttpErrorResponse(400, f"Bad request: {line}") from err
+    if ':' not in line:
+        raise UHttpErrorResponse(400, "Wrong header format")
+    key, val = line.split(':', 1)
+    return key.strip().lower(), val.strip()
+
+
+def encode_data(headers, data):
+    """encode data by its type
+    """
+    if isinstance(data, (dict, list, tuple, int, float)):
+        data = json.dumps(data).encode('ascii')
+        if CONTENT_TYPE not in headers:
+            headers[CONTENT_TYPE] = CONTENT_TYPE_JSON
+    elif isinstance(data, str):
+        data = data.encode('utf-8')
+        if CONTENT_TYPE not in headers:
+            headers[CONTENT_TYPE] = CONTENT_TYPE_HTML_UTF8
+    elif isinstance(data, (bytes, bytearray)):
+        if CONTENT_TYPE not in headers:
+            headers[CONTENT_TYPE] = CONTENT_TYPE_OCTET_STREAM
+    else:
+        raise UHttpErrorResponse(500, f"Unsupported data type: {type(data)}")
+    headers[CONTENT_LENGTH] = len(data)
+    if CACHE_CONTROL not in headers:
+        headers[CACHE_CONTROL] = CACHE_CONTROL_NO_CACHE
+    return data
+
+
 class HttpClient():
     """Simple socket client"""
 
     # pylint: disable=too-many-instance-attributes
 
-    _CHUNK_SIZE = 4096
-    _MAX_CONTENT_LENGTH = 65536
-    CONTENT_LENGTH = 'Content-Length'
-    CONTENT_TYPE = 'Content-Type'
-    CONTENT_DISPOSITION = 'Content-Disposition'
-    CONTENT_TYPE_XFORMDATA = 'application/x-www-form-urlencoded'
-    CONTENT_TYPE_HTML_UTF8 = 'text/html;charset=UTF-8'
-    CONTENT_TYPE_JSON = 'application/json'
-    CONTENT_TYPE_OCTET_STREAM = 'application/octet-stream'
-    CACHE_CONTROL = 'Cache-Control'
-    CACHE_CONTROL_NO_CACHE = 'no-cache'
-    CONNECTION = 'Connection'
-    CONNECTION_CLOSE = 'close'
-    HOST = 'Host'
-    METHODS = (
-        'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST',
-        'PUT', 'TRACE')
-    PROTOCOLS = ('HTTP/1.0', 'HTTP/1.1')
-    STATUS_CODES = {
-        100: "Continue",
-        200: "OK",
-        201: "Created",
-        202: "Accepted",
-        204: "No Content",
-        205: "Reset Content",
-        206: "Partial Content",
-        300: "Multiple Choices",
-        301: "Moved Permanently",
-        302: "Found",
-        303: "See Other",
-        304: "Not Modified",
-        307: "Temporary Redirect",
-        308: "Permanent Redirect",
-        400: "Bad Request",
-        401: "Unauthorized",
-        403: "Forbidden",
-        404: "Not Found",
-        405: "Method Not Allowed",
-        406: "Not Acceptable",
-        408: "Request Timeout",
-        411: "Length Required",
-        413: "Payload Too Large",
-        414: "URI Too Long",
-        415: "Unsupported Media Type",
-        416: "Range Not Satisfiable",
-        500: "Internal Server Error",
-        501: "Not Implemented",
-        507: "Insufficient Storage",
-    }
+    STATE_DATA = 2
+    STATE_LOADED = 3
+    def __init__(self, sock, addr):
+        """Create http client
 
-    def __init__(
-            self, sock, addr,
-            chunk_size=_CHUNK_SIZE,
-            max_content_lenght=_MAX_CONTENT_LENGTH):
+        Arguments:
+            sock: client socket
+            addr: tuple with address and port from client
+        """
         self._addr = addr
         self._socket = sock
         self._buffer = bytearray()
-        self._bytes_counter = 0
-        self._chunk_size = chunk_size
-        self._max_content_lenght = max_content_lenght
+        self._rx_bytes_counter = 0
         self._method = None
         self._url = None
         self._protocol = None
@@ -177,12 +234,15 @@ class HttpClient():
         self._data = None
         self._path = None
         self._query = None
+        self._content_length = None
+        self._time = time.time()
+        self._state = None
 
     def __del__(self):
         self._socket.close()
 
     def __str__(self):
-        result = f"HttpClient: "
+        result = "HttpClient: "
         result += f"[{self._addr[0]}:{self._addr[1]}] "
         result += f"{self.method} "
         result += f"http://{self.full_url} "
@@ -207,7 +267,7 @@ class HttpClient():
     @property
     def host(self):
         """URL address"""
-        return self.headers_get(self.HOST, '')
+        return self.headers_get(HOST, '')
 
     @property
     def full_url(self):
@@ -245,168 +305,121 @@ class HttpClient():
         return self._socket
 
     @property
-    def bytes_counter(self):
+    def rx_bytes_counter(self):
         """Read bytes counter"""
-        return self._bytes_counter
+        return self._rx_bytes_counter
 
-    def headers_get(self, key, default=None):
-        """Get value from headers
+    @property
+    def is_loaded_headers(self):
+        """State"""
+        return bool(self._headers)
 
-        Arguments:
-            key: key from headers (case insensitive)
-            default: default value if the key does not exists
+    @property
+    def is_loaded_all(self):
+        """State"""
+        return self._state == self.STATE_LOADED
 
-        Returns:
-            value from headers
-        """
-        return self._headers.get(key.lower(), default)
+    @property
+    def content_length(self):
+        """Content length"""
+        if self._headers is None:
+            return None
+        if self._content_length is None:
+            content_length = self.headers_get(CONTENT_LENGTH, None)
+            if not content_length:
+                self._content_length = False
+            elif content_length.isnumeric():
+                self._content_length = int(content_length)
+            else:
+                raise UHttpErrorResponse(400, f"Wrong content length {content_length}")
+        return self._content_length
 
-    def _recv(self, size):
-        if len(self._buffer) < size:
-            buffer = self._socket.recv(size - len(self._buffer))
-            self._buffer.extend(buffer)
+    def _recv_to_buffer(self, size):
+        buffer = self._socket.recv(size - len(self._buffer))
+        # print(f"RX: {buffer}")
+        if not buffer:
+            raise UHttpDisconnected(f"Lost connection from client {self.addr}")
+        self._rx_bytes_counter += len(buffer)
+        self._buffer.extend(buffer)
 
-    def read(self, size=None):
-        """Read chunk"""
-        if size is None:
-            size = self._chunk_size
-        self._recv(size)
-        res = self._buffer[:size]
-        self._buffer = self._buffer[size:]
-        self._bytes_counter += len(res)
-        # print("RECV:", res)
-        return res
-
-    def read_block(self, size=None, delimiter=b'\n'):
-        """Read chunk block with delimiter
-
-        Arguments:
-            size: chunk size (default is self._chunk_size)
-            delimiter: data block delimiter
-
-        Returns:
-            data block
-        """
-        if size is None:
-            size = self._chunk_size
-        if delimiter not in self._buffer:
-            self._recv(size)
-            if delimiter not in self._buffer:
-                res = bytes(self._buffer)
-                self._buffer = bytearray()
-                return res
-        endline_index = bytes(self._buffer).index(delimiter) + len(delimiter)
-        res = bytes(self._buffer[:endline_index])
-        self._buffer = self._buffer[endline_index:]
-        self._bytes_counter += len(res)
-        # print("RECV:", res)
-        return res
-
-    def read_request(self):
-        """Read request
-        """
-        line = self.read_block()
-        if not line:
-            raise UHttpError("No data received")
-        if line[-1] != 0x0a:
-            raise UHttpError(f"Request line is too long > {len(line)}")
-        try:
-            method, url, protocol = line.strip().split(b' ')
-        except ValueError as err:
-            raise UHttpError(f"Bad request: {line} ({err})") from err
+    def _parse_http_request(self, line):
+        if line.count(b' ') != 2:
+            raise UHttpError(f"Bad request: {line}")
+        method, url, protocol = line.strip().split(b' ')
         try:
             self._method = method.decode('ascii')
-            self._protocol = protocol.decode('ascii')
             self._url = url.decode('ascii')
+            self._protocol = protocol.decode('ascii')
         except UnicodeError as err:
-            raise UHttpError(f"Bad request: {line} ({err})") from err
-        if self._method not in self.METHODS:
-            raise UHttpError(f"Unexpected method in request {self._method}")
-        if self._protocol not in self.PROTOCOLS:
-            raise UHttpError(f"Unexpected protocol in request {self._protocol}")
-        self.read_headers()
-        self.read_data()
+            raise UHttpErrorResponse(400, f"Bad request: {line} ({err})") from err
+        if self._method not in METHODS:
+            raise UHttpErrorResponse(405, f"Unexpected method in request {self._method}")
+        if self._protocol not in PROTOCOLS:
+            raise UHttpErrorResponse(400, f"Unexpected protocol in request {self._protocol}")
         self._path, self._query = parse_url(url)
 
-    def read_headers(self):
-        """Read headers
-        """
-        self._headers = {}
-        while True:
-            line = self.read_block()
-            if line[-1] != 0x0a:
-                raise UHttpError("Header line is too long")
+    def _process_data(self):
+        if len(self._buffer) != self.content_length:
+            return
+        value = self.headers_get(CONTENT_TYPE, '')
+        content_type_parts = parse_header_parameters(value)
+        if CONTENT_TYPE_XFORMDATA in content_type_parts:
+            self._data = parse_query(self._buffer)
+        elif CONTENT_TYPE_JSON in content_type_parts:
             try:
-                line = line.decode('ascii').strip()
-            except UnicodeError as err:
-                raise UHttpError(f"Bad header: {line} ({err})") from err
+                self._data = json.loads(self._buffer)
+            except json.JSONDecodeError as err:
+                raise UHttpErrorResponse(400, f"ERROR: Json decode: {err}") from err
+        else:
+            self._data = self._buffer
+            self._buffer = bytearray()
+        self._state = self.STATE_LOADED
+
+    def _process_headers(self, header_lines):
+        self._headers = {}
+        while header_lines:
+            line = header_lines.pop(0)
             if not line:
                 break
-            if ':' in line:
-                key, val = line.split(':', 1)
-                val = val.strip()
-                if key.lower() == self.CONTENT_DISPOSITION.lower():
-                    val = parse_header_parameters(val)
-                self._headers[key.lower()] = val
+            if self._method is None:
+                self._parse_http_request(line)
             else:
-                raise UHttpError("Wrong header format")
-
-    def read_data(self):
-        """Read data part
-        """
-        content_length = int(self.headers_get(self.CONTENT_LENGTH, 0))
-        if not content_length:
-            # ignore data if there is no content length
-            return
-        if content_length > self._max_content_lenght:
-            raise UHttpError(f'Data too large: {content_length}')
-        value = self.headers_get(self.CONTENT_TYPE, '')
-        content_type_parts = parse_header_parameters(value)
-        res_data = self.read(content_length)
-        if self.CONTENT_TYPE_XFORMDATA in content_type_parts:
-            self._data = parse_query(res_data)
-        elif self.CONTENT_TYPE_JSON in content_type_parts:
-            try:
-                self._data = json.loads(res_data)
-            except json.JSONDecodeError as err:
-                raise UHttpError(f"ERROR: Json decode: {err}") from err
+                key, val = parse_header_line(line)
+                self._headers[key] = val
+        if self.content_length:
+            if self.content_length > MAX_CONTENT_LENGTH:
+                raise UHttpErrorResponse(413, f"content-length: {self.content_length}")
+            self._state = self.STATE_DATA
+            self._process_data()
         else:
-            self._data = res_data
+            self._state = self.STATE_LOADED
 
-    def encode_data(self, headers, data):
-        """Create general response
+    def _read_headers(self):
+        self._recv_to_buffer(MAX_HEADERS_LENGTH)
+        for delimiter in HEADERS_DELIMITERS:
+            if delimiter in self._buffer:
+                end_index = self._buffer.index(delimiter)
+                end_index += len(delimiter)
+                header_lines = self._buffer[:end_index].splitlines()
+                self._buffer = self._buffer[end_index:]
+                self._process_headers(header_lines)
+                return
+        if len(self._buffer) == MAX_HEADERS_LENGTH:
+            raise UHttpErrorResponse(414, "Request header is too big")
 
-        Arguments:
-            headers: dictionary headers data,
-                will update Content-Type, Content-Length
-                and cache control will set to 'no-cache'
-            data: content data:
-                dict, list, tuple, int, float:
-                    create JSON response and json content type
-                str: will be encoded as UTF-8 and text/html content type
-                bytes, bytearray: will be sent as is
-        Returns:
-            encoded content data
-        """
-        if isinstance(data, (dict, list, tuple, int, float)):
-            data = json.dumps(data).encode('ascii')
-            if self.CONTENT_TYPE not in headers:
-                headers[self.CONTENT_TYPE] = self.CONTENT_TYPE_JSON
-        elif isinstance(data, str):
-            data = data.encode('utf-8')
-            if self.CONTENT_TYPE not in headers:
-                headers[self.CONTENT_TYPE] = self.CONTENT_TYPE_HTML_UTF8
-        elif isinstance(data, (bytes, bytearray)):
-            if self.CONTENT_TYPE not in headers:
-                headers[self.CONTENT_TYPE] = self.CONTENT_TYPE_OCTET_STREAM
-        else:
-            raise UHttpError(f"Unsupported data type: {type(data)}")
-        headers[self.CONTENT_LENGTH] = len(data)
-        if self.CACHE_CONTROL not in headers:
-            headers[self.CACHE_CONTROL] = self.CACHE_CONTROL_NO_CACHE
-        return data
+    def read_request(self):
+        """Read HTTP request. Call this when data ready on a socket"""
+        if self._state is None:
+            self._read_headers()
+        elif self._state == self.STATE_DATA:
+            self._recv_to_buffer(self.content_length)
+            self._process_data()
 
-    def response(self, status=200, headers=None, data=None):
+    def headers_get(self, key, default=None):
+        """Get value from headers"""
+        return self._headers.get(key.lower(), default)
+
+    def response(self, data=None, status=200, headers=None):
         """Create general response
 
         Arguments:
@@ -414,17 +427,17 @@ class HttpClient():
             headers: dictionary with custom headers
             data: content
         """
-        header = f'HTTP/1.1 {status} {self.STATUS_CODES[status]}\r\n'
+        header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
         if headers is None:
             headers = {}
         if data:
-            data = self.encode_data(headers, data)
-        if self.CONNECTION not in headers:
-            headers[self.CONNECTION] = self.CONNECTION_CLOSE
+            data = encode_data(headers, data)
+        if CONNECTION not in headers:
+            headers[CONNECTION] = CONNECTION_CLOSE
         for key, val in headers.items():
             header += f'{key}: {val}\r\n'
         header += '\r\n'
-        self.socket.sendall(header.encode('utf-8'))
+        self.socket.sendall(header.encode('ascii'))
         if data:
             self.socket.sendall(data)
         self._socket.close()
@@ -435,13 +448,16 @@ class HttpClient():
         Arguments:
             url: URL address to send redirect
         """
-        self.response(status=status, headers={'Location': url})
+        self.response(status=status, headers={LOCATION: url})
 
 
 class HttpServer():
     """Http server
     """
-    def __init__(self, address='0.0.0.0', port=80):
+    def __init__(
+            self,
+            address='0.0.0.0',
+            port=80):
         """Create http server
 
         Arguments:
@@ -456,33 +472,31 @@ class HttpServer():
 
     @property
     def socket(self):
-        """Client socket
-
-        Returns:
-            client socket
-        """
+        """Server socket"""
         return self._socket
 
-    def accept(self):
-        """Accept new connection from client
-
-        Returns:
-            instance of client or None on error
-        """
+    def _accept(self):
         cl_socket, addr = self._socket.accept()
+        print(f'_____________________________________\nNEW connection: {addr}')
         client = HttpClient(cl_socket, addr)
         self._waiting_clients.append(client)
 
-    def client_process(self, client):
+    def _process_client(self, client):
         try:
             client.read_request()
+        except UHttpErrorResponse as err:
+            print(f'uHttp error: {err}')
+            client.response(data=str(err), status=err.status)
+            self._waiting_clients.remove(client)
         except UHttpError as err:
             print(f'uHttp error: {err}')
+            self._waiting_clients.remove(client)
             del client
-            client = None
             gc.collect()
-        self._waiting_clients.remove(client)
-        return client
+        if client.is_loaded_all:
+            self._waiting_clients.remove(client)
+            return client
+        return None
 
     def wait(self, timeout=1):
         """Wait for client connect
@@ -495,10 +509,10 @@ class HttpServer():
         """
         read_sockets = [client.socket for client in self._waiting_clients]
         read_sockets.append(self._socket)
-        read_event = select.select(read_sockets, [], [], timeout)[0]
-        if self._socket in read_event:
-            self.accept()
+        read_events = select.select(read_sockets, [], [], timeout)[0]
+        if self._socket in read_events:
+            self._accept()
         for client in self._waiting_clients:
-            if client.socket in read_event:
-                return self.client_process(client)
+            if client.socket in read_events:
+                return self._process_client(client)
         return None
