@@ -70,12 +70,12 @@ def client_result_html(client):
 def process_request(client):
     print_result(client)
     if client.path == '/rpc':
-        client.response(data=client.headers)
+        client.respond(data=client.headers)
     elif client.path in ('/post', '/get'):
-        client.response_redirect('/')
+        client.respond_redirect('/')
     else:
         res = client_result_html(client)
-        client.response(data=res)
+        client.respond(data=res)
 
 
 
@@ -88,6 +88,7 @@ def test(port=80):
         if client:
             process_request(client)
             gc.collect()
+            print(gc.mem_alloc())
 
 
 if __name__ == '__main__':

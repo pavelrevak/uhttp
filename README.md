@@ -1,10 +1,10 @@
-# uHTTP simple HTTP server
+# uHTTP: simple HTTP server
 
 ## Features:
 
 - support MicroPython and also cPython
-- low level implementation
-- uses synchronous (not uses ASYNC or multiple threads) but can process multiple connections
+- minimalist and low level implementation using posix sockets
+- is fully synchronous (not uses ASYNC or multiple threads) but can work with multiple connections
 - support delayed response, user can hold client instance and reply later
 - support for raw data (HTML, binary, ...) and also for JSON (send and receive)
 - need at least 32KB RAM to work (depends on configured limits)
@@ -21,12 +21,12 @@ while True:
     if client:
         if client.path == '/':
             # result is html
-            client.response("<h1>hello</h1><p>uHTTP</p>")
+            client.respond("<h1>hello</h1><p>uHTTP</p>")
         elif client.path == '/rpc':
             # result is json
-            client.response({'message': 'hello', 'success': True, 'headers': client.headers, 'query': client.query})
+            client.respond({'message': 'hello', 'success': True, 'headers': client.headers, 'query': client.query})
         else:
-            client.response("Not found", status=404)
+            client.respond("Not found", status=404)
 
 ```
 
@@ -38,27 +38,27 @@ while True:
 
 **`uhttp.decode_percent_encoding(data)`**
 
-Decode percent encoded data (bytes)
+- Decode percent encoded data (bytes)
 
 **`uhttp.parse_header_parameters(value)`**
 
-Parse parameters/directives from header value, returns dict
+- Parse parameters/directives from header value, returns dict
 
 **`uhttp.parse_query(raw_query, query=None)`**
 
-Parse raw_query from URL, append it to existing query, returns dict
+- Parse raw_query from URL, append it to existing query, returns dict
 
 **`uhttp.parse_url(url)`**
 
-Parse URL to path and query
+- Parse URL to path and query
 
 **`uhttp.parse_header_line(line)`**
 
-Parse header line to key and value
+- Parse header line to key and value
 
 **`uhttp.encode_response_data(headers, data)`**
 
-encode response data by its type
+- Encode response data by its type
 
 
 ### Class `HttpServer`:
@@ -69,24 +69,22 @@ encode response data by its type
 
 **`socket(self)`**
 
-Server socket
+- Server socket
 
 **`read_sockets(self)`**
 
-All sockets waiting for communication, used for select
+- All sockets waiting for communication, used for select
 
 
 #### Methods:
 
 **`process_events(self, read_events)`**
 
-Process sockets with read_events,
-returns None or instance of HttpClient with established connection
+- Process sockets with read_events, returns None or instance of HttpClient with established connection
 
 **`wait(self, timeout=1)`**
 
-Wait for new clients with specified timeout,
-returns None or instance of HttpClient with established connection
+- Wait for new clients with specified timeout, returns None or instance of HttpClient with established connection
 
 ### Class `HttpClient`:
 
@@ -96,74 +94,78 @@ returns None or instance of HttpClient with established connection
 
 **`addr(self)`**
 
-Client address
+- Client address
 
 **`method(self)`**
 
-HTTP method
+- HTTP method
 
 **`url(self)`**
 
-URL address
+- URL address
 
 **`host(self)`**
 
-URL address
+- URL address
 
 **`full_url(self)`**
 
-URL address
+- URL address
 
 **`protocol(self)`**
 
-Protocol
+- Protocol
 
 **`headers(self)`**
 
-headers dict
+- headers dict
 
 **`data(self)`**
 
-Content data
+- Content data
 
 **`path(self)`**
 
-Path
+- Path
 
 **`query(self)`**
 
-Query dict
+- Query dict
+
+**`cookies(self)`**
+
+- Query dict
 
 **`socket(self)`**
 
-This socket
+- This socket
 
 **`rx_bytes_counter(self)`**
 
-Read bytes counter
+- Read bytes counter
 
 **`is_loaded_all(self)`**
 
-State
+- State if request is fully loaded
 
 **`content_length(self)`**
 
-Content length
+- Content length
 
 #### Methods:
 
 **`headers_get(self, key, default=None)`**
 
-Return value from headers by key, or default if key not found
+- Return value from headers by key, or default if key not found
 
 **`process_request(self)`**
 
-Process HTTP request when read event on client socket
+- Process HTTP request when read event on client socket
 
-**`response(self, data=None, status=200, headers=None)`**
+**`respond(self, data=None, status=200, headers=None, cookies=None)`**
 
-Create general response with data, status and headers as dict
+- Create general response with data, status and headers as dict
 
-**`response_redirect(self, url, status=302)`**
+**`respond_redirect(self, url, status=302, cookies=None)`**
 
-Create redirect response to URL
+- Create redirect response to URL

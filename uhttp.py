@@ -2,9 +2,9 @@
 python or micropython
 """
 
-import socket
-import select
-import json
+import socket as _socket
+import select as _select
+import json as _json
 
 
 MAX_WAITING_CLIENTS = 5
@@ -22,6 +22,8 @@ CACHE_CONTROL_NO_CACHE = 'no-cache'
 LOCATION = 'Location'
 CONNECTION = 'connection'
 CONNECTION_CLOSE = 'close'
+COOKIE = 'cookie'
+SET_COOKIE = 'set-cookie'
 HOST = 'host'
 METHODS = (
     'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST',
@@ -56,11 +58,16 @@ STATUS_CODES = {
     416: "Range Not Satisfiable",
     500: "Internal Server Error",
     501: "Not Implemented",
+    503: "Service Unavailable",
     507: "Insufficient Storage",
 }
 
 
-class HttpError(Exception):
+class ClientError(Exception):
+    """Server error"""
+
+
+class HttpError(ClientError):
     """uHttp error"""
 
 
@@ -161,7 +168,7 @@ def parse_header_line(line):
 def encode_response_data(headers, data):
     """encode response data by its type"""
     if isinstance(data, (dict, list, tuple, int, float)):
-        data = json.dumps(data).encode('ascii')
+        data = _json.dumps(data).encode('ascii')
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_JSON
     elif isinstance(data, str):
@@ -180,11 +187,9 @@ def encode_response_data(headers, data):
     return data
 
 
-class HttpClient():
-    """Simple HTTP client"""
-
+class HttpConnection():
+    """Simple HTTP client connection"""
     # pylint: disable=too-many-instance-attributes
-
     STATE_LOADING = 0
     STATE_DATA = 1
     STATE_LOADED = 2
@@ -203,13 +208,14 @@ class HttpClient():
         self._path = None
         self._query = None
         self._content_length = None
-        self._state = self.STATE_LOADING
+        self._cookies = None
 
     def __del__(self):
-        self._socket.close()
+        if self._socket:
+            self._socket.close()
 
-    def __str__(self):
-        result = "HttpClient: "
+    def __repr__(self):
+        result = "HttpConnection: "
         result += f"[{self._addr[0]}:{self._addr[1]}] "
         result += f"{self.method} "
         result += f"http://{self.full_url} "
@@ -234,7 +240,7 @@ class HttpClient():
     @property
     def host(self):
         """URL address"""
-        return self.headers_get(HOST, '')
+        return self._headers.get(HOST, '')
 
     @property
     def full_url(self):
@@ -267,6 +273,21 @@ class HttpClient():
         return self._query
 
     @property
+    def cookies(self):
+        """Cookies dict"""
+        if self._cookies is None:
+            self._cookies = {}
+            raw_cookies = self._headers.get(COOKIE)
+            if raw_cookies:
+                for cookie_param in self._headers.get(COOKIE).split(';'):
+                    if '=' in cookie_param:
+                        key, val = cookie_param.split('=')
+                        key = key.strip()
+                        if key:
+                            self._cookies[key] = val.strip()
+        return self._cookies
+
+    @property
     def socket(self):
         """This socket"""
         return self._socket
@@ -277,9 +298,14 @@ class HttpClient():
         return self._rx_bytes_counter
 
     @property
-    def is_loaded_all(self):
-        """State"""
-        return self._state == self.STATE_LOADED
+    def is_loaded(self):
+        """True when request is fully loaded"""
+        return self._method and (not self.content_length or self._data)
+
+    @property
+    def content_type(self):
+        """Content type"""
+        return self._headers.get(CONTENT_TYPE, '')
 
     @property
     def content_length(self):
@@ -287,8 +313,8 @@ class HttpClient():
         if self._headers is None:
             return None
         if self._content_length is None:
-            content_length = self.headers_get(CONTENT_LENGTH, None)
-            if not content_length:
+            content_length = self._headers.get(CONTENT_LENGTH)
+            if content_length is None:
                 self._content_length = False
             elif content_length.isdigit():
                 self._content_length = int(content_length)
@@ -324,22 +350,22 @@ class HttpClient():
         self._path, self._query = parse_url(url)
 
     def _process_data(self):
-        if len(self._buffer) != self.content_length:
+        if len(self._buffer) < self.content_length:
             return
-        value = self.headers_get(CONTENT_TYPE, '')
+        # TODO: unexpected state when buffer has more data than content-length
+        value = self.content_type
         content_type_parts = parse_header_parameters(value)
         if CONTENT_TYPE_XFORMDATA in content_type_parts:
             self._data = parse_query(self._buffer)
         elif CONTENT_TYPE_JSON in content_type_parts:
             try:
-                self._data = json.loads(self._buffer)
-            except json.JSONDecodeError as err:
+                self._data = _json.loads(self._buffer)
+            except _json.JSONDecodeError as err:
                 raise HttpErrorWithResponse(
                     400, f"ERROR: Json decode: {err}") from err
         else:
             self._data = self._buffer
             self._buffer = bytearray()
-        self._state = self.STATE_LOADED
 
     def _process_headers(self, header_lines):
         self._headers = {}
@@ -356,10 +382,7 @@ class HttpClient():
             if self.content_length > MAX_CONTENT_LENGTH:
                 raise HttpErrorWithResponse(
                     413, f"content-length: {self.content_length}")
-            self._state = self.STATE_DATA
             self._process_data()
-        else:
-            self._state = self.STATE_LOADED
 
     def _read_headers(self):
         self._recv_to_buffer(MAX_HEADERS_LENGTH)
@@ -374,53 +397,74 @@ class HttpClient():
         if len(self._buffer) == MAX_HEADERS_LENGTH:
             raise HttpErrorWithResponse(414, "Request header is too big")
 
+    def close(self):
+        """Close connection"""
+        self._socket.close()
+        self._socket = None
+
     def headers_get(self, key, default=None):
         """Return value from headers by key, or default if key not found"""
         return self._headers.get(key.lower(), default)
 
     def process_request(self):
         """Process HTTP request when read event on client socket"""
-        if self._state == self.STATE_LOADING:
-            self._read_headers()
-        elif self._state == self.STATE_DATA:
-            self._recv_to_buffer(self.content_length)
-            self._process_data()
+        if self._socket is None:
+            return None
+        try:
+            if self._method is None:
+                self._read_headers()
+            elif self.content_length:
+                self._recv_to_buffer(self.content_length)
+                self._process_data()
+            # TODO: check for stream data without content-length
+            return self.is_loaded
+        except HttpErrorWithResponse as err:
+            self.respond(data=str(err), status=err.status)
+            raise ClientError from err
+        return None
 
-    def response(self, data=None, status=200, headers=None):
-        """Create general response with data, status and headers as dict"""
+    def respond(self, data=None, status=200, headers=None, cookies=None):
+        """Create general respond with data, status and headers as dict"""
+        if self._socket is None:
+            return
         header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
         if headers is None:
             headers = {}
         if data:
             data = encode_response_data(headers, data)
         if CONNECTION not in headers:
+            # TODO support persistent connection
             headers[CONNECTION] = CONNECTION_CLOSE
         for key, val in headers.items():
             header += f'{key}: {val}\r\n'
+        if cookies:
+            # Set-Cookie key can be repeated in header
+            for key, val in cookies.items():
+                # TODO add support for attributes
+                if val is None:
+                    val = '; Max-Age=0'
+                header += f'{SET_COOKIE}: {key}={val}\r\n'
         header += '\r\n'
-        self.socket.sendall(header.encode('ascii'))
+        self._socket.sendall(header.encode('ascii'))
         if data:
-            self.socket.sendall(data)
+            self._socket.sendall(data)
         self._socket.close()
 
-    def response_redirect(self, url, status=302):
-        """Create redirect response to URL"""
-        self.response(status=status, headers={LOCATION: url})
+    def respond_redirect(self, url, status=302, cookies=None):
+        """Create redirect respond to URL"""
+        self.respond(status=status, headers={LOCATION: url}, cookies=cookies)
 
 
 class HttpServer():
     """HTTP server"""
 
-    def __init__(
-            self,
-            address='0.0.0.0',
-            port=80):
+    def __init__(self, address='0.0.0.0', port=80):
         """IP address and port of listening interface for HTTP"""
-        self._socket = socket.socket()
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket = _socket.socket()
+        self._socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         self._socket.bind((address, port))
         self._socket.listen(2)
-        self._waiting_clients = []
+        self._waiting_connections = []
 
     @property
     def socket(self):
@@ -430,48 +474,49 @@ class HttpServer():
     @property
     def read_sockets(self):
         """All sockets waiting for communication, used for select"""
-        read_sockets = [client.socket for client in self._waiting_clients]
+        read_sockets = [
+            con.socket
+            for con in self._waiting_connections
+            if con.socket is not None]
         read_sockets.append(self._socket)
         return read_sockets
 
+    def close(self):
+        """Close HTTP server"""
+        self._socket.close()
+
+    def _remove_connection(self, connection):
+        self._waiting_connections.remove(connection)
+
     def _accept(self):
         cl_socket, addr = self._socket.accept()
-        client = HttpClient(cl_socket, addr)
-        while len(self._waiting_clients) > MAX_WAITING_CLIENTS:
-            client = self._waiting_clients.pop(9)
-            client.response('Request timeout, too many requests', status=408)
-        self._waiting_clients.append(client)
+        connection = HttpConnection(cl_socket, addr)
+        while len(self._waiting_connections) > MAX_WAITING_CLIENTS:
+            self._remove_connection(self._waiting_connections[0])
+            connection.respond('Request timeout, too many requests', status=408)
+        self._waiting_connections.append(connection)
 
-    def _process_client(self, client):
-        try:
-            client.process_request()
-        except HttpErrorWithResponse as err:
-            client.response(data=str(err), status=err.status)
-            self._waiting_clients.remove(client)
-        except HttpDisconnected:
-            self._waiting_clients.remove(client)
-        except HttpError:
-            self._waiting_clients.remove(client)
-        else:
-            if client.is_loaded_all:
-                self._waiting_clients.remove(client)
-                return client
-        return None
-
-    def process_events(self, read_events):
-        """Process sockets with read_events,
-        returns None or instance of HttpClient with established connection"""
-        if self._socket in read_events:
+    def event_read(self, sockets):
+        """Process sockets with read_event,
+        returns None or instance of HttpConnection with established connection"""
+        if self._socket in sockets:
             self._accept()
-        for client in self._waiting_clients:
-            if client.socket in read_events:
-                return self._process_client(client)
+            return None
+        for connection in self._waiting_connections:
+            if connection.socket in sockets:
+                try:
+                    if connection.process_request():
+                        self._remove_connection(connection)
+                        return connection
+                except ClientError:
+                    connection.close()
+                    self._remove_connection(connection)
         return None
 
     def wait(self, timeout=1):
         """Wait for new clients with specified timeout,
-        returns None or instance of HttpClient with established connection"""
-        read_events = select.select(self.read_sockets, [], [], timeout)[0]
-        if read_events:
-            return self.process_events(read_events)
+        returns None or instance of HttpConnection with established connection"""
+        event_sockets = _select.select(self.read_sockets, [], [], timeout)[0]
+        if event_sockets:
+            return self.event_read(event_sockets)
         return None

@@ -11,6 +11,10 @@ def print_result(client):
         print("QUERY:")
         for key, val in client.query.items():
             print(f"  {key}: {val}")
+    if client.cookies:
+        print("COOKIE:")
+        for key, val in client.cookies.items():
+            print(f"  {key}: {val}")
     if client.data:
         if isinstance(client.data, dict):
             print("DATA:")
@@ -38,6 +42,11 @@ def client_result_html(client):
     if client.query:
         res += '<p><div><b>QUERY:</b></div>\n'
         for key, val in client.query.items():
+            res += f"<div><code>  {key}: {val}</code></div>\n"
+    res += '</p>'
+    if client.cookies:
+        res += '<p><div><b>COOKIE:</b></div>\n'
+        for key, val in client.cookies.items():
             res += f"<div><code>  {key}: {val}</code></div>\n"
     res += '</p>'
     if client.data:
@@ -70,12 +79,14 @@ def client_result_html(client):
 def process_request(client):
     print_result(client)
     if client.path == '/rpc':
-        client.response(data=client.headers)
+        client.respond(data=client.headers)
     elif client.path in ('/post', '/get'):
-        client.response_redirect('/')
+        client.respond_redirect('/')
+    elif client.path == '/set-cookie':
+        client.respond_redirect('/', cookies=client.query)
     else:
         res = client_result_html(client)
-        client.response(data=res)
+        client.respond(data=res)
 
 
 def test(port=7780):
