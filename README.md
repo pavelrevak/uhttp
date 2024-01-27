@@ -144,10 +144,6 @@ while True:
 
 - This socket
 
-**`rx_bytes_counter(self)`**
-
-- Read bytes counter
-
 **`is_loaded_all(self)`**
 
 - State if request is fully loaded

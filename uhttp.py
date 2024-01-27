@@ -197,7 +197,6 @@ class HttpConnection():
         self._addr = addr
         self._socket = sock
         self._buffer = bytearray()
-        self._rx_bytes_counter = 0
         self._method = None
         self._url = None
         self._protocol = None
@@ -291,11 +290,6 @@ class HttpConnection():
         return self._socket
 
     @property
-    def rx_bytes_counter(self):
-        """Read bytes counter"""
-        return self._rx_bytes_counter
-
-    @property
     def is_loaded(self):
         """True when request is fully loaded"""
         return self._method and (not self.content_length or self._data)
@@ -325,7 +319,6 @@ class HttpConnection():
         buffer = self._socket.recv(size - len(self._buffer))
         if not buffer:
             raise HttpDisconnected(f"Lost connection from client {self.addr}")
-        self._rx_bytes_counter += len(buffer)
         self._buffer.extend(buffer)
 
     def _parse_http_request(self, line):
