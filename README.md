@@ -1,4 +1,5 @@
-# uHTTP: simple HTTP server
+# uHTTP: micro HTTP server
+
 
 ## Features:
 
@@ -10,7 +11,9 @@
 - need at least 32KB RAM to work (depends on configured limits)
 - do many check for bad requests and or headers, and many errors will not break this
 
-### example
+
+## usage
+
 ```python
 import uhttp
 
@@ -29,6 +32,7 @@ while True:
             client.respond("Not found", status=404)
 
 ```
+
 
 ## API
 
@@ -75,7 +79,6 @@ while True:
 
 - All sockets waiting for communication, used for select
 
-
 #### Methods:
 
 **`process_events(self, read_events)`**
@@ -85,6 +88,7 @@ while True:
 **`wait(self, timeout=1)`**
 
 - Wait for new clients with specified timeout, returns None or instance of HttpClient with established connection
+
 
 ### Class `HttpClient`:
 

@@ -51,6 +51,7 @@ STATUS_CODES = {
     405: "Method Not Allowed",
     406: "Not Acceptable",
     408: "Request Timeout",
+    410: "Gone",
     411: "Length Required",
     413: "Payload Too Large",
     414: "URI Too Long",
@@ -190,9 +191,6 @@ def encode_response_data(headers, data):
 class HttpConnection():
     """Simple HTTP client connection"""
     # pylint: disable=too-many-instance-attributes
-    STATE_LOADING = 0
-    STATE_DATA = 1
-    STATE_LOADED = 2
 
     def __init__(self, sock, addr):
         """sock - client socket, addr - tuple (ip, port)"""
