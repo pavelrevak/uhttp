@@ -151,9 +151,9 @@ def parse_query(raw_query, query=None):
                 else:
                     key = decode_percent_encoding(query_part).decode('utf-8')
                     val = None
-            except ValueError as err:
+            except (UnicodeError, ValueError) as err:
                 raise HttpErrorWithResponse(
-                    400, f"Bad query encoding: {query_part} ({err})") from err
+                    400, "Bad query coding") from err
             if key not in query:
                 query[key] = val
             elif isinstance(query[key], list):
@@ -171,7 +171,11 @@ def parse_url(url):
         query = parse_query(raw_query, query)
     else:
         path = url
-    path = decode_percent_encoding(path).decode('utf-8')
+    try:
+        path = decode_percent_encoding(path).decode('utf-8')
+    except (UnicodeError, ValueError) as err:
+        raise HttpErrorWithResponse(
+            400, "Wrong header path coding") from err
     return path, query
 
 
