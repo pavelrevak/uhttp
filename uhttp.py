@@ -255,7 +255,7 @@ class HttpConnection():
     @property
     def remote_address(self):
         """Return client address"""
-        forwarded = self.headers.get('x-forwarded-for')
+        forwarded = self.headers_get_attribute('x-forwarded-for')
         if forwarded:
             return forwarded.split(',')[0]
         return f"{self._addr[0]}:{self._addr[1]}"
@@ -263,7 +263,7 @@ class HttpConnection():
     @property
     def remote_addresses(self):
         """Return client address"""
-        forwarded = self.headers.get('x-forwarded-for')
+        forwarded = self.headers_get_attribute('x-forwarded-for')
         if forwarded:
             return forwarded
         return f"{self._addr[0]}:{self._addr[1]}"
@@ -281,7 +281,7 @@ class HttpConnection():
     @property
     def host(self):
         """URL address"""
-        return self._headers.get(HOST, '')
+        return self.headers_get_attribute(HOST, '')
 
     @property
     def full_url(self):
@@ -318,9 +318,9 @@ class HttpConnection():
         """Cookies dict"""
         if self._cookies is None:
             self._cookies = {}
-            raw_cookies = self._headers.get(COOKIE)
+            raw_cookies = self.headers_get_attribute(COOKIE)
             if raw_cookies:
-                for cookie_param in self._headers.get(COOKIE).split(';'):
+                for cookie_param in self.headers_get_attribute(COOKIE).split(';'):
                     if '=' in cookie_param:
                         key, val = cookie_param.split('=')
                         key = key.strip()
@@ -346,7 +346,7 @@ class HttpConnection():
     @property
     def content_type(self):
         """Content type"""
-        return self._headers.get(CONTENT_TYPE, '')
+        return self.headers_get_attribute(CONTENT_TYPE, '')
 
     @property
     def content_length(self):
@@ -354,7 +354,7 @@ class HttpConnection():
         if self._headers is None:
             return None
         if self._content_length is None:
-            content_length = self._headers.get(CONTENT_LENGTH)
+            content_length = self.headers_get_attribute(CONTENT_LENGTH)
             if content_length is None:
                 self._content_length = False
             elif content_length.isdigit():
@@ -363,6 +363,12 @@ class HttpConnection():
                 raise HttpErrorWithResponse(
                     400, f"Wrong content length {content_length}")
         return self._content_length
+
+    def headers_get_attribute(self, key, default=None):
+        """Return headers value"""
+        if self._headers:
+            return self._headers.get(key, default)
+        return default
 
     def _recv_to_buffer(self, size):
         try:
