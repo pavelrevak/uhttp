@@ -503,7 +503,7 @@ class HttpConnection():
         except OSError:
             # ignore this error, client has been disconnected during sending
             pass
-        self._socket.close()
+        self.close()
 
     def response_multipart(self, headers=None):
         """Create multipart respond with headers as dict"""
@@ -523,7 +523,7 @@ class HttpConnection():
         try:
             self._socket.sendall(header.encode('ascii'))
         except OSError:
-            self._socket.close()
+            self.close()
             return False
         return True
 
@@ -548,7 +548,7 @@ class HttpConnection():
             self._socket.sendall(data)
             self._socket.sendall('\r\n')
         except OSError:
-            self._socket.close()
+            self.close()
             return False
         return True
 
@@ -558,7 +558,7 @@ class HttpConnection():
         try:
             self._socket.sendall(f'--{boundary}--\r\n')
         except OSError:
-            self._socket.close()
+            self.close()
 
     def respond_redirect(self, url, status=302, cookies=None):
         """Create redirect respond to URL"""
