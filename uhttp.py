@@ -218,8 +218,9 @@ class HttpConnection():
 
     # pylint: disable=too-many-instance-attributes
 
-    def __init__(self, sock, addr, **kwargs):
+    def __init__(self, server, sock, addr, **kwargs):
         """sock - client socket, addr - tuple (ip, port)"""
+        self._server = server
         self._addr = addr
         self._socket = sock
         self._buffer = bytearray()
@@ -446,10 +447,18 @@ class HttpConnection():
             raise HttpErrorWithResponse(
                 431, f"({self._buffer} > {self._max_headers_length} Bytes)")
 
+    def _send(self, data):
+        if isinstance(data, str):
+            data.encode('ascii')
+        self._socket.sendall(data)
+
     def close(self):
         """Close connection"""
-        self._socket.close()
-        self._socket = None
+        if self._server:
+            self._server.remove_connection(self)
+        if self._socket:
+            self._socket.close()
+            self._socket = None
 
     def headers_get(self, key, default=None):
         """Return value from headers by key, or default if key not found"""
@@ -497,9 +506,9 @@ class HttpConnection():
                 header += f'{SET_COOKIE}: {key}={val}\r\n'
         header += '\r\n'
         try:
-            self._socket.sendall(header.encode('ascii'))
+            self._send(header)
             if data:
-                self._socket.sendall(data)
+                self._send(data)
         except OSError:
             # ignore this error, client has been disconnected during sending
             pass
@@ -521,7 +530,7 @@ class HttpConnection():
             header += f'{key}: {val}\r\n'
         header += '\r\n'
         try:
-            self._socket.sendall(header.encode('ascii'))
+            self._send(header)
         except OSError:
             self.close()
             return False
@@ -544,21 +553,23 @@ class HttpConnection():
             header += f'{key}: {val}\r\n'
         header += '\r\n'
         try:
-            self._socket.sendall(header.encode('ascii'))
-            self._socket.sendall(data)
-            self._socket.sendall('\r\n')
+            self._send(header)
+            self._send(data)
+            self._send('\r\n')
         except OSError:
             self.close()
             return False
         return True
 
     def response_multipart_end(self, boundary=None):
+        """Finish multipart stream"""
         if not boundary:
             boundary = BOUNDARY
         try:
-            self._socket.sendall(f'--{boundary}--\r\n')
+            self._send(f'--{boundary}--\r\n')
         except OSError:
-            self.close()
+            pass
+        self.close()
 
     def respond_redirect(self, url, status=302, cookies=None):
         """Create redirect respond to URL"""
@@ -600,12 +611,13 @@ class HttpServer():
         self._socket.close()
         self._socket = None
 
-    def _remove_connection(self, connection):
-        self._waiting_connections.remove(connection)
+    def remove_connection(self, connection):
+        if connection in self._waiting_connections:
+            self._waiting_connections.remove(connection)
 
     def _accept(self):
         cl_socket, addr = self._socket.accept()
-        connection = HttpConnection(cl_socket, addr, **self._kwargs)
+        connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
             connection_to_remove = self._waiting_connections.pop(0)
             connection_to_remove.respond(
@@ -620,16 +632,14 @@ class HttpServer():
             return None
         for connection in list(self._waiting_connections):
             if connection.socket is None:
-                self._remove_connection(connection)
+                self.remove_connection(connection)
                 continue
             if connection.socket in sockets:
                 try:
                     if connection.process_request():
-                        self._remove_connection(connection)
                         return connection
                 except ClientError:
-                    connection.close()
-                    self._remove_connection(connection)
+                    self.remove_connection(connection)
         return None
 
     def wait(self, timeout=1):
