@@ -10,7 +10,7 @@ class TestDecodePercentEncoding(unittest.TestCase):
             b'-%3D%5B%5D%5C%3B%27%2C.%2F+')
         self.assertEqual(res, b'~!@#$%^&*()_+{}|:"<>?`-=[]\\;\',./ ')
 
-    def test_percedecode_nt_encoding_utf8(self):
+    def test_percent_decode_encoding_utf8(self):
         res = uhttp.decode_percent_encoding(
             b'a%C3%A1%C3%A4bc%C4%8Dd%C4%8Fe%C3%A9%C4%9Bfghi%C3%ADjkl%C4%BAmn'
             b'%C5%88o%C3%B3%C3%B4pkqr%C5%95%C5%99s%C5%A1t%C5%A5u%C3%BA%C5%AF'
@@ -19,7 +19,7 @@ class TestDecodePercentEncoding(unittest.TestCase):
             res.decode('utf-8'),
             'aáäbcčdďeéěfghiíjklĺmnňoóôpkqrŕřsštťuúůvwxyýzž')
 
-    def test_percedecode_nt_encoding_binary(self):
+    def test_percent_decode_encoding_binary(self):
         res = uhttp.decode_percent_encoding(
             b'%00%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14'
             b'%15%16%17%18%19%1A%1B%1C%1D%1E%1F%20%21%22%23%24%25%26%27%28%29'
