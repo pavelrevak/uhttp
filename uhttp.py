@@ -233,6 +233,7 @@ class HttpConnection():
         self._query = None
         self._content_length = None
         self._cookies = None
+        self._is_multipart = False
         self._max_headers_length = kwargs.get(
             'max_headers_length', MAX_HEADERS_LENGTH)
         self._max_content_length = kwargs.get(
@@ -458,6 +459,8 @@ class HttpConnection():
         """Process HTTP request when read event on client socket"""
         if self._socket is None:
             return None
+        if self._is_multipart:
+            return False
         try:
             if self._method is None:
                 self._read_headers()
@@ -506,6 +509,7 @@ class HttpConnection():
         """Create multipart respond with headers as dict"""
         if self._socket is None:
             return False
+        self._is_multipart = True
         header = f'{PROTOCOLS[-1]} {200} {STATUS_CODES[200]}\r\n'
         if headers is None:
             headers = {}
@@ -614,7 +618,10 @@ class HttpServer():
         if self._socket in sockets:
             self._accept()
             return None
-        for connection in self._waiting_connections:
+        for connection in list(self._waiting_connections):
+            if connection.socket is None:
+                self._remove_connection(connection)
+                continue
             if connection.socket in sockets:
                 try:
                     if connection.process_request():
