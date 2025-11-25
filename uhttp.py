@@ -224,6 +224,7 @@ class HttpConnection():
         self._addr = addr
         self._socket = sock
         self._buffer = bytearray()
+        self._send_buffer = bytearray()
         self._rx_bytes_counter = 0
         self._method = None
         self._url = None
@@ -346,6 +347,11 @@ class HttpConnection():
         return self._method and (not self.content_length or self._data)
 
     @property
+    def has_data_to_send(self):
+        """True when there is data waiting to be sent"""
+        return len(self._send_buffer) > 0
+
+    @property
     def content_type(self):
         """Content type"""
         return self.headers_get_attribute(CONTENT_TYPE, '')
@@ -448,17 +454,35 @@ class HttpConnection():
                 431, f"({self._buffer} > {self._max_headers_length} Bytes)")
 
     def _send(self, data):
+        """Add data to send buffer for async sending"""
+        if self.socket is None:
+            return
         if isinstance(data, str):
-            data.encode('ascii')
-        self._socket.sendall(data)
+            data = data.encode('ascii')
+        self._send_buffer.extend(data)
+        self._try_send()
+
+    def _try_send(self):
+        """Try to send data from send buffer, returns True if all sent"""
+        if not self._send_buffer:
+            return True
+        if self._socket is None:
+            return False
+        try:
+            sent = self._socket.send(self._send_buffer)
+            if sent > 0:
+                self._send_buffer = self._send_buffer[sent:]
+            return len(self._send_buffer) == 0
+        except OSError:
+            return False
 
     def close(self):
         """Close connection"""
-        if self._server:
-            self._server.remove_connection(self)
+        self._server.remove_connection(self)
         if self._socket:
             self._socket.close()
             self._socket = None
+            self._send_buffer = None
 
     def headers_get(self, key, default=None):
         """Return value from headers by key, or default if key not found"""
@@ -509,10 +533,12 @@ class HttpConnection():
             self._send(header)
             if data:
                 self._send(data)
+            # Close only if all data was sent, otherwise wait for write events
+            if not self.has_data_to_send:
+                self.close()
         except OSError:
             # ignore this error, client has been disconnected during sending
-            pass
-        self.close()
+            self.close()
 
     def response_multipart(self, headers=None):
         """Create multipart respond with headers as dict"""
@@ -567,9 +593,10 @@ class HttpConnection():
             boundary = BOUNDARY
         try:
             self._send(f'--{boundary}--\r\n')
+            if not self.has_data_to_send:
+                self.close()
         except OSError:
-            pass
-        self.close()
+            self.close()
 
     def respond_redirect(self, url, status=302, cookies=None):
         """Create redirect respond to URL"""
@@ -605,6 +632,14 @@ class HttpServer():
         if self._socket:
             read_sockets.append(self._socket)
         return read_sockets
+
+    @property
+    def write_sockets(self):
+        """All sockets with data to send, used for select"""
+        return [
+            con.socket
+            for con in self._waiting_connections
+            if con.socket is not None and con.socket.fileno() > 0 and con.has_data_to_send]
 
     def close(self):
         """Close HTTP server"""
@@ -642,10 +677,28 @@ class HttpServer():
                     self.remove_connection(connection)
         return None
 
+    def event_write(self, sockets):
+        """Process sockets with write_event, send buffered data"""
+        for connection in list(self._waiting_connections):
+            if connection.socket is None:
+                self.remove_connection(connection)
+                continue
+            if connection.socket in sockets:
+                try:
+                    if connection._try_send():
+                        # All data sent, close connection if it was responding
+                        # (connection is still in waiting list after respond() if data was buffered)
+                        connection.close()
+                except OSError:
+                    self.remove_connection(connection)
+
     def wait(self, timeout=1):
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
-        event_sockets = _select.select(self.read_sockets, [], [], timeout)[0]
-        if event_sockets:
-            return self.event_read(event_sockets)
+        read_sockets, write_sockets, _ = _select.select(
+            self.read_sockets, self.write_sockets, [], timeout)
+        if write_sockets:
+            self.event_write(write_sockets)
+        if read_sockets:
+            return self.event_read(read_sockets)
         return None
