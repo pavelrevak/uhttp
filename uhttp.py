@@ -242,8 +242,7 @@ class HttpConnection():
             'max_content_length', MAX_CONTENT_LENGTH)
 
     def __del__(self):
-        if self._socket:
-            self._socket.close()
+        self.close()
 
     def __repr__(self):
         result = f"HttpConnection: [{self.remote_address}] {self.method}"
@@ -455,34 +454,36 @@ class HttpConnection():
 
     def _send(self, data):
         """Add data to send buffer for async sending"""
-        if self.socket is None:
+        if self._socket is None:
             return
         if isinstance(data, str):
             data = data.encode('ascii')
         self._send_buffer.extend(data)
-        self._try_send()
+        self.try_send()
 
-    def _try_send(self):
+    def try_send(self):
         """Try to send data from send buffer, returns True if all sent"""
-        if not self._send_buffer:
-            return True
         if self._socket is None:
             return False
+        if not self._send_buffer:
+            return True
         try:
             sent = self._socket.send(self._send_buffer)
             if sent > 0:
                 self._send_buffer = self._send_buffer[sent:]
             return len(self._send_buffer) == 0
         except OSError:
+            self.close()
             return False
 
     def close(self):
         """Close connection"""
         self._server.remove_connection(self)
         if self._socket:
+            print(f"closing connection: {self}")
             self._socket.close()
             self._socket = None
-            self._send_buffer = None
+            self._send_buffer[:] = b''
 
     def headers_get(self, key, default=None):
         """Return value from headers by key, or default if key not found"""
@@ -685,7 +686,7 @@ class HttpServer():
                 continue
             if connection.socket in sockets:
                 try:
-                    if connection._try_send():
+                    if connection.try_send():
                         # All data sent, close connection if it was responding
                         # (connection is still in waiting list after respond() if data was buffered)
                         connection.close()
