@@ -512,6 +512,7 @@ class HttpConnection():
         """Create general respond with data, status and headers as dict"""
         if self._socket is None:
             return
+        self._is_multipart = False
         header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
         if headers is None:
             headers = {}
@@ -592,6 +593,7 @@ class HttpConnection():
         """Finish multipart stream"""
         if not boundary:
             boundary = BOUNDARY
+        self._is_multipart = False
         try:
             self._send(f'--{boundary}--\r\n')
             if not self.has_data_to_send:
@@ -689,7 +691,9 @@ class HttpServer():
                     if connection.try_send():
                         # All data sent, close connection if it was responding
                         # (connection is still in waiting list after respond() if data was buffered)
-                        connection.close()
+                        # Don't close active multipart streams
+                        if not connection._is_multipart:
+                            connection.close()
                 except OSError:
                     self.remove_connection(connection)
 
