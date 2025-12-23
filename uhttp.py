@@ -35,6 +35,18 @@ CONNECTION_KEEP_ALIVE = 'keep-alive'
 COOKIE = 'cookie'
 SET_COOKIE = 'set-cookie'
 HOST = 'host'
+CONTENT_TYPE_MAP = {
+    'html': CONTENT_TYPE_HTML_UTF8,
+    'htm': CONTENT_TYPE_HTML_UTF8,
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'svg': 'image/svg+xml',
+    'webp': 'image/webp',
+    'ico': 'image/x-icon',
+    'bmp': 'image/bmp',
+}
 METHODS = (
     'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST',
     'PUT', 'TRACE')
@@ -480,7 +492,6 @@ class HttpConnection():
         """Close connection"""
         self._server.remove_connection(self)
         if self._socket:
-            print(f"closing connection: {self}")
             self._socket.close()
             self._socket = None
             self._send_buffer[:] = b''
@@ -508,7 +519,8 @@ class HttpConnection():
             raise ClientError from err
         return None
 
-    def respond(self, data=None, status=200, headers=None, cookies=None):
+    def respond(
+                self, data=None, status=200, headers=None, cookies=None):
         """Create general respond with data, status and headers as dict"""
         if self._socket is None:
             return
@@ -541,6 +553,25 @@ class HttpConnection():
         except OSError:
             # ignore this error, client has been disconnected during sending
             self.close()
+
+    def respond_file(self, file_name, headers=None):
+        """Respond with file content, auto-detect content-type from extension"""
+        if headers is None:
+            headers = {}
+
+        try:
+            with open(file_name, 'rb') as f:
+                data = f.read()
+        except OSError:
+            self.respond(data=f'File not found: {file_name}', status=404)
+            return
+
+        # Set content-type based on file extension if not already set
+        if CONTENT_TYPE not in headers:
+            ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
+            headers[CONTENT_TYPE] = CONTENT_TYPE_MAP.get(ext, CONTENT_TYPE_OCTET_STREAM)
+
+        self.respond(data=data, headers=headers)
 
     def response_multipart(self, headers=None):
         """Create multipart respond with headers as dict"""
