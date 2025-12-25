@@ -439,20 +439,23 @@ class HttpConnection():
     def _process_data(self):
         if len(self._buffer) < self.content_length:
             return
-        # TODO: check for exception if buffer has more data than content-length
+        # Extract only content_length bytes from buffer
+        data_bytes = bytes(self._buffer[:self.content_length])
+        # Keep remaining bytes in buffer for next request (keep-alive)
+        self._buffer = self._buffer[self.content_length:]
+
         value = self.content_type
         content_type_parts = parse_header_parameters(value)
         if CONTENT_TYPE_XFORMDATA in content_type_parts:
-            self._data = parse_query(self._buffer)
+            self._data = parse_query(data_bytes)
         elif CONTENT_TYPE_JSON in content_type_parts:
             try:
-                self._data = _json.loads(self._buffer)
+                self._data = _json.loads(data_bytes)
             except ValueError as err:
                 raise HttpErrorWithResponse(
                     400, f"ERROR: Json decode: {err}") from err
         else:
-            self._data = self._buffer
-            self._buffer = bytearray()
+            self._data = data_bytes
 
     def _process_headers(self, header_lines):
         self._headers = {}
@@ -471,6 +474,17 @@ class HttpConnection():
             self._process_data()
 
     def _read_headers(self):
+        # Check if headers are already complete in buffer (pipelining support)
+        for delimiter in HEADERS_DELIMITERS:
+            if delimiter in self._buffer:
+                end_index = self._buffer.index(delimiter)
+                end_index += len(delimiter)
+                header_lines = self._buffer[:end_index].splitlines()
+                self._buffer = self._buffer[end_index:]
+                self._process_headers(header_lines)
+                return
+
+        # Headers not complete, read more data from socket
         self._recv_to_buffer(self._max_headers_length)
         for delimiter in HEADERS_DELIMITERS:
             if delimiter in self._buffer:
@@ -514,7 +528,7 @@ class HttpConnection():
 
     def reset(self):
         """Reset connection for next request (keep-alive)"""
-        self._buffer = bytearray()
+        # Don't clear buffer - may contain start of next request
         self._method = None
         self._url = None
         self._protocol = None
@@ -531,7 +545,11 @@ class HttpConnection():
         """Close connection"""
         self._server.remove_connection(self)
         if self._socket:
-            self._socket.close()
+            try:
+                self._socket.close()
+            except OSError:
+                # Socket already closed or error during close
+                pass
             self._socket = None
             self._send_buffer[:] = b''
 
@@ -755,7 +773,11 @@ class HttpServer():
 
     def close(self):
         """Close HTTP server"""
-        self._socket.close()
+        try:
+            self._socket.close()
+        except OSError:
+            # Socket already closed or error during close
+            pass
         self._socket = None
 
     def remove_connection(self, connection):
@@ -771,7 +793,11 @@ class HttpServer():
                 self.remove_connection(connection)
 
     def _accept(self):
-        cl_socket, addr = self._socket.accept()
+        try:
+            cl_socket, addr = self._socket.accept()
+        except OSError:
+            # Socket error during accept (e.g., connection reset)
+            return
         connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
             connection_to_remove = self._waiting_connections.pop(0)
@@ -818,6 +844,20 @@ class HttpServer():
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
         self._cleanup_idle_connections()
+
+        # Check for pipelined requests already in buffer (before select)
+        for connection in list(self._waiting_connections):
+            if connection.socket is None:
+                self.remove_connection(connection)
+                continue
+            # If buffer has data and not currently loaded, try to process
+            if len(connection._buffer) > 0 and not connection.is_loaded:
+                try:
+                    if connection.process_request():
+                        return connection
+                except ClientError:
+                    self.remove_connection(connection)
+
         read_sockets, write_sockets, _ = _select.select(
             self.read_sockets, self.write_sockets, [], timeout)
         if write_sockets:
