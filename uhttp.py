@@ -223,8 +223,6 @@ def encode_response_data(headers, data):
     else:
         raise HttpErrorWithResponse(415, str(type(data)))
     headers[CONTENT_LENGTH] = len(data)
-    if CACHE_CONTROL not in headers:
-        headers[CACHE_CONTROL] = CACHE_CONTROL_NO_CACHE
     return data
 
 
@@ -251,6 +249,8 @@ class HttpConnection():
         self._content_length = None
         self._cookies = None
         self._is_multipart = False
+        self._response_started = False
+        self._response_keep_alive = False
         self._max_headers_length = kwargs.get(
             'max_headers_length', MAX_HEADERS_LENGTH)
         self._max_content_length = kwargs.get(
@@ -367,6 +367,11 @@ class HttpConnection():
         return self._method and (not self.content_length or self._data)
 
     @property
+    def is_waiting_for_response(self):
+        """True when request is loaded but response not yet started"""
+        return self.is_loaded and not self._response_started
+
+    @property
     def is_timed_out(self):
         """True when connection has been idle too long"""
         return (_time.time() - self._last_activity) > self._keep_alive_timeout
@@ -468,6 +473,11 @@ class HttpConnection():
             else:
                 key, val = parse_header_line(line)
                 self._headers[key] = val
+
+        # RFC 2616: HTTP/1.1 requires Host header
+        if self._protocol == 'HTTP/1.1' and 'host' not in self._headers:
+            raise HttpErrorWithResponse(400, "Host header is required for HTTP/1.1")
+
         if self.content_length:
             if self.content_length > self._max_content_length:
                 raise HttpErrorWithResponse(413)
@@ -539,6 +549,8 @@ class HttpConnection():
         self._content_length = None
         self._cookies = None
         self._is_multipart = False
+        self._response_started = False
+        self._response_keep_alive = False
         self.update_activity()
 
     def close(self):
@@ -563,6 +575,9 @@ class HttpConnection():
             return None
         if self._is_multipart:
             return False
+        # Don't process next pipelined request until current one gets response
+        if self.is_waiting_for_response:
+            return False
         try:
             if self._method is None:
                 self._read_headers()
@@ -584,6 +599,9 @@ class HttpConnection():
         """Create general respond with data, status and headers as dict"""
         if self._socket is None:
             return
+        if self._response_started:
+            raise HttpError("Response already sent for this request")
+        self._response_started = True
         self._is_multipart = False
 
         # Determine keep-alive behavior
@@ -599,6 +617,9 @@ class HttpConnection():
         # Disable keep-alive if limits reached
         if keep_alive and (self.is_max_requests_reached or self.is_timed_out):
             keep_alive = False
+
+        # Store keep-alive decision for event_write
+        self._response_keep_alive = keep_alive
 
         header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
         if headers is None:
@@ -634,6 +655,8 @@ class HttpConnection():
 
     def respond_file(self, file_name, headers=None, keep_alive=None):
         """Respond with file content, auto-detect content-type from extension"""
+        if self._response_started:
+            raise HttpError("Response already sent for this request")
         if headers is None:
             headers = {}
 
@@ -657,14 +680,15 @@ class HttpConnection():
         """Create multipart respond with headers as dict"""
         if self._socket is None:
             return False
+        if self._response_started:
+            raise HttpError("Response already sent for this request")
+        self._response_started = True
         self._is_multipart = True
         header = f'{PROTOCOLS[-1]} {200} {STATUS_CODES[200]}\r\n'
         if headers is None:
             headers = {}
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_MULTIPART_REPLACE
-        if CACHE_CONTROL not in headers:
-            headers[CACHE_CONTROL] = CACHE_CONTROL_NO_CACHE
         for key, val in headers.items():
             header += f'{key}: {val}\r\n'
         header += '\r\n'
@@ -832,11 +856,14 @@ class HttpServer():
             if connection.socket in sockets:
                 try:
                     if connection.try_send():
-                        # All data sent, close connection if it was responding
+                        # All data sent
                         # (connection is still in waiting list after respond() if data was buffered)
                         # Don't close active multipart streams
                         if not connection._is_multipart:
-                            connection.close()
+                            if connection._response_keep_alive:
+                                connection.reset()
+                            else:
+                                connection.close()
                 except OSError:
                     self.remove_connection(connection)
 
@@ -849,6 +876,9 @@ class HttpServer():
         for connection in list(self._waiting_connections):
             if connection.socket is None:
                 self.remove_connection(connection)
+                continue
+            # Skip connections waiting for response (pipelining order preservation)
+            if connection.is_waiting_for_response:
                 continue
             # If buffer has data and not currently loaded, try to process
             if len(connection._buffer) > 0 and not connection.is_loaded:

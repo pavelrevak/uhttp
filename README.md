@@ -12,6 +12,23 @@
 - do many check for bad requests and or headers, and many errors will not break this
 
 
+## Testing
+
+Comprehensive test suite with 93 tests covering all major functionality.
+
+Run all tests from the project root:
+
+```bash
+# Run all tests
+python -m unittest discover -s tests
+
+# Run with verbose output
+python -m unittest discover -s tests -v
+```
+
+See [tests/README.md](tests/README.md) for detailed test documentation.
+
+
 ## usage
 
 ```python
