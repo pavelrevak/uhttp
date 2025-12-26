@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestPipeliningSimple(unittest.TestCase):
@@ -15,7 +15,7 @@ class TestPipeliningSimple(unittest.TestCase):
     def test_server_blocks_second_request_until_first_responds(self):
         """Test that server doesn't return second pipelined request before first is answered"""
 
-        server = uhttp.HttpServer(port=9976)
+        server = uhttp_server.HttpServer(port=9976)
         events = []
 
         def run_server():

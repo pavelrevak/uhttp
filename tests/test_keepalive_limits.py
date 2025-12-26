@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestKeepAliveMaxRequests(unittest.TestCase):
@@ -19,7 +19,7 @@ class TestKeepAliveMaxRequests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server with max_requests=3"""
-        cls.server = uhttp.HttpServer(port=cls.PORT, keep_alive_max_requests=3)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT, keep_alive_max_requests=3)
 
         def run_server():
             try:
@@ -182,7 +182,7 @@ class TestKeepAliveTimeout(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server with timeout=2s"""
-        cls.server = uhttp.HttpServer(port=cls.PORT, keep_alive_timeout=2)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT, keep_alive_timeout=2)
 
         def run_server():
             try:

@@ -7,7 +7,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestContentLengthSecurity(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestContentLengthSecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server once for all tests"""
-        cls.server = uhttp.HttpServer(port=cls.PORT)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT)
 
         def run_server():
             try:

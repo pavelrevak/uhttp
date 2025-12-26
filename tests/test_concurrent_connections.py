@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestConcurrentConnections(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestConcurrentConnections(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server once for all tests"""
-        cls.server = uhttp.HttpServer(port=cls.PORT, max_waiting_clients=10)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT, max_waiting_clients=10)
 
         def run_server():
             try:

@@ -1,17 +1,17 @@
 import unittest
-import uhttp
+import uhttp_server
 
 
 class TestDecodePercentEncoding(unittest.TestCase):
 
     def test_decode_percent_encoding(self):
-        res = uhttp.decode_percent_encoding(
+        res = uhttp_server.decode_percent_encoding(
             b'%7E%21%40%23%24%25%5E%26*%28%29_%2B%7B%7D%7C%3A%22%3C%3E%3F%60'
             b'-%3D%5B%5D%5C%3B%27%2C.%2F+')
         self.assertEqual(res, b'~!@#$%^&*()_+{}|:"<>?`-=[]\\;\',./ ')
 
     def test_percent_decode_encoding_utf8(self):
-        res = uhttp.decode_percent_encoding(
+        res = uhttp_server.decode_percent_encoding(
             b'a%C3%A1%C3%A4bc%C4%8Dd%C4%8Fe%C3%A9%C4%9Bfghi%C3%ADjkl%C4%BAmn'
             b'%C5%88o%C3%B3%C3%B4pkqr%C5%95%C5%99s%C5%A1t%C5%A5u%C3%BA%C5%AF'
             b'vwxy%C3%BDz%C5%BE')
@@ -20,7 +20,7 @@ class TestDecodePercentEncoding(unittest.TestCase):
             'aáäbcčdďeéěfghiíjklĺmnňoóôpkqrŕřsštťuúůvwxyýzž')
 
     def test_percent_decode_encoding_binary(self):
-        res = uhttp.decode_percent_encoding(
+        res = uhttp_server.decode_percent_encoding(
             b'%00%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14'
             b'%15%16%17%18%19%1A%1B%1C%1D%1E%1F%20%21%22%23%24%25%26%27%28%29'
             b'%2A%2B%2C-.%2F0123456789%3A%3B%3C%3D%3E%3F%40ABCDEFGHIJKLMNOPQR'
@@ -38,7 +38,7 @@ class TestDecodePercentEncoding(unittest.TestCase):
 class TestParseHeaderParameters(unittest.TestCase):
 
     def test_parse_header_parameters(self):
-        res = uhttp.parse_header_parameters(
+        res = uhttp_server.parse_header_parameters(
             'xyz=123;abcd=efgh; ijkl=mnop')
         self.assertEqual(res, {'xyz': '123', 'abcd': 'efgh', 'ijkl': 'mnop'})
 
@@ -46,43 +46,43 @@ class TestParseHeaderParameters(unittest.TestCase):
 class TestParseQuery(unittest.TestCase):
 
     def test_empty(self):
-        query = uhttp.parse_query(b'')
+        query = uhttp_server.parse_query(b'')
         self.assertEqual(query, {})
 
     def test_key_only(self):
-        query = uhttp.parse_query(b'aa')
+        query = uhttp_server.parse_query(b'aa')
         self.assertEqual(query, {'aa': None})
 
     def test_key_only_multiple(self):
-        query = uhttp.parse_query(b'aa&bb')
+        query = uhttp_server.parse_query(b'aa&bb')
         self.assertEqual(query, {'aa': None, 'bb': None})
 
     def test_key_only_multiple_same(self):
-        query = uhttp.parse_query(b'aa&aa')
+        query = uhttp_server.parse_query(b'aa&aa')
         self.assertEqual(query, {'aa': [None, None]})
 
     def test_param_str(self):
-        query = uhttp.parse_query(b'cc=xyz')
+        query = uhttp_server.parse_query(b'cc=xyz')
         self.assertEqual(query, {'cc': 'xyz'})
 
     def test_param_multiple(self):
-        query = uhttp.parse_query(b'cc=xyz&dd=pqr')
+        query = uhttp_server.parse_query(b'cc=xyz&dd=pqr')
         self.assertEqual(query, {'cc': 'xyz', 'dd': 'pqr'})
 
     def test_param_multiple_same(self):
-        query = uhttp.parse_query(b'cc=xyz&&cc=pqr')
+        query = uhttp_server.parse_query(b'cc=xyz&&cc=pqr')
         self.assertEqual(query, {'cc': ['xyz', 'pqr']})
 
     def test_key_only_and_key_value(self):
-        query = uhttp.parse_query(b'aa&aa=xyz')
+        query = uhttp_server.parse_query(b'aa&aa=xyz')
         self.assertEqual(query, {'aa': [None, 'xyz']})
 
     def test_key_value_and_key_only(self):
-        query = uhttp.parse_query(b'aa=xyz&aa')
+        query = uhttp_server.parse_query(b'aa=xyz&aa')
         self.assertEqual(query, {'aa': ['xyz', None]})
 
     def test_param_mixed2(self):
-        query = uhttp.parse_query(b'aa&bb&bb&cc&cc=xyz&&cc=pqr&dd=zzz')
+        query = uhttp_server.parse_query(b'aa&bb&bb&cc&cc=xyz&&cc=pqr&dd=zzz')
         self.assertEqual(query, {
             'aa': None,
             'bb': [None, None],
@@ -93,7 +93,7 @@ class TestParseQuery(unittest.TestCase):
 class TestParseHeaderLine(unittest.TestCase):
 
     def test_root(self):
-        line = uhttp.parse_header_line(b'Content-Length: 123')
+        line = uhttp_server.parse_header_line(b'Content-Length: 123')
         self.assertEqual(line, ('content-length', '123'))
 
 

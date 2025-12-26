@@ -103,15 +103,25 @@ python -m unittest tests.test_data_parsing.TestDataParsing.test_json_simple_obje
   - Streaming data
   - Frame-by-frame delivery
 
+- **test_ssl.py** (6 tests in 2 classes)
+  - SSL/TLS HTTPS connections
+  - SSL GET and POST requests
+  - SSL keep-alive connections
+  - `is_secure` property validation
+  - HTTP to HTTPS redirect pattern
+  - Dual HTTP/HTTPS server operation
+  - Note: Test certificates (`cert.pem`, `key.pem`) are generated automatically if not present
+
 ## Test Coverage
 
-Total: **93 tests** covering:
+Total: **105 tests** covering:
 - HTTP request/response parsing
 - Keep-alive connection management
 - Security (request smuggling, size limits)
 - Concurrent connections
 - Error handling
 - Multipart responses
+- SSL/TLS HTTPS connections
 - URL encoding/decoding
 - Cookie handling
 - Query parameter parsing

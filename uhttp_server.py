@@ -236,6 +236,16 @@ class HttpConnection():
         self._server = server
         self._addr = addr
         self._socket = sock
+        # Set appropriate I/O methods based on socket type
+        # In MicroPython, both regular and SSL sockets have recv/send methods
+        # In CPython, SSL sockets use read/write instead
+        # Prefer recv/send if available (MicroPython), fall back to read/write (CPython SSL)
+        if hasattr(sock, 'recv'):
+            self._socket_recv = sock.recv
+            self._socket_send = sock.send
+        else:
+            self._socket_recv = sock.read
+            self._socket_send = sock.write
         self._buffer = bytearray()
         self._send_buffer = bytearray()
         self._rx_bytes_counter = 0
@@ -290,6 +300,11 @@ class HttpConnection():
         if forwarded:
             return forwarded
         return f"{self._addr[0]}:{self._addr[1]}"
+
+    @property
+    def is_secure(self):
+        """Return True if connection is using SSL/TLS"""
+        return bool(self._server._ssl_context)
 
     @property
     def method(self):
@@ -415,8 +430,12 @@ class HttpConnection():
 
     def _recv_to_buffer(self, size):
         try:
-            buffer = self._socket.recv(size - len(self._buffer))
+            buffer = self._socket_recv(size - len(self._buffer))
         except OSError as err:
+            # EAGAIN/EWOULDBLOCK means no data available (non-blocking socket)
+            errno = getattr(err, 'errno', None)
+            if errno in (11, 35):  # EAGAIN, EWOULDBLOCK
+                return  # Not an error, just no data yet
             raise HttpDisconnected(f"{err}: {self.addr}") from err
         if not buffer:
             raise HttpDisconnected(f"Lost connection from client {self.addr}")
@@ -524,11 +543,19 @@ class HttpConnection():
         if not self._send_buffer:
             return True
         try:
-            sent = self._socket.send(self._send_buffer)
+            sent = self._socket_send(self._send_buffer)
+            # MicroPython SSL may return None instead of bytes sent when buffer full
+            if sent is None:
+                return False
             if sent > 0:
                 self._send_buffer = self._send_buffer[sent:]
             return len(self._send_buffer) == 0
-        except OSError:
+        except OSError as e:
+            # EAGAIN/EWOULDBLOCK means socket buffer is full (non-blocking)
+            errno = getattr(e, 'errno', None)
+            if errno in (11, 35):  # EAGAIN, EWOULDBLOCK
+                return False
+            # Other errors are real connection problems
             self.close()
             return False
 
@@ -640,9 +667,14 @@ class HttpConnection():
                 header += f'{SET_COOKIE}: {key}={val}\r\n'
         header += '\r\n'
         try:
-            self._send(header)
+            # Send header and body together to avoid TCP packet splitting
+            # This ensures pipelined responses arrive atomically
             if data:
-                self._send(data)
+                # Convert header to bytes and concatenate with data
+                header_bytes = header.encode('ascii') if isinstance(header, str) else header
+                self._send(header_bytes + data)
+            else:
+                self._send(header)
             # Close only if all data was sent, otherwise wait for write events
             if not self.has_data_to_send:
                 if keep_alive:
@@ -760,9 +792,10 @@ class HttpConnection():
 class HttpServer():
     """HTTP server"""
 
-    def __init__(self, address='0.0.0.0', port=80, **kwargs):
+    def __init__(self, address='0.0.0.0', port=80, ssl_context=None, **kwargs):
         """IP address and port of listening interface for HTTP"""
         self._kwargs = kwargs
+        self._ssl_context = ssl_context
         self._socket = _socket.socket()
         self._socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         self._socket.bind((address, port))
@@ -782,7 +815,7 @@ class HttpServer():
         read_sockets = [
             con.socket
             for con in self._waiting_connections
-            if con.socket is not None and con.socket.fileno() > 0]
+            if con.socket is not None and self._is_socket_valid(con.socket)]
         if self._socket:
             read_sockets.append(self._socket)
         return read_sockets
@@ -793,7 +826,17 @@ class HttpServer():
         return [
             con.socket
             for con in self._waiting_connections
-            if con.socket is not None and con.socket.fileno() > 0 and con.has_data_to_send]
+            if con.socket is not None and self._is_socket_valid(con.socket) and con.has_data_to_send]
+
+    def _is_socket_valid(self, sock):
+        """Check if socket is valid (MicroPython compatible)"""
+        try:
+            # Try to use fileno() if available (CPython and some MicroPython)
+            return sock.fileno() > 0
+        except (OSError, AttributeError):
+            # If fileno() not available or fails, assume socket is valid
+            # MicroPython sockets may not have fileno()
+            return True
 
     def close(self):
         """Close HTTP server"""
@@ -822,6 +865,32 @@ class HttpServer():
         except OSError:
             # Socket error during accept (e.g., connection reset)
             return
+
+        # Disable Nagle's algorithm for better pipelining performance
+        try:
+            cl_socket.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+        except (OSError, AttributeError):
+            pass  # Ignore if not supported
+
+        # Wrap socket with SSL if ssl_context is configured
+        if self._ssl_context:
+            try:
+                cl_socket = self._ssl_context.wrap_socket(
+                    cl_socket, server_side=True)
+            except OSError:
+                # SSL handshake failed
+                try:
+                    cl_socket.close()
+                except OSError:
+                    pass
+                return
+
+        # Set socket to non-blocking mode for async I/O
+        try:
+            cl_socket.setblocking(False)
+        except (OSError, AttributeError):
+            pass  # Ignore if not supported
+
         connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
             connection_to_remove = self._waiting_connections.pop(0)
@@ -872,7 +941,22 @@ class HttpServer():
         returns None or instance of HttpConnection with established connection"""
         self._cleanup_idle_connections()
 
-        # Check for pipelined requests already in buffer (before select)
+        # First, try to flush any pending buffered data before checking pipelined requests
+        # This ensures responses are sent in correct order (RFC 2616 pipelining)
+        for connection in list(self._waiting_connections):
+            if connection.socket is not None and connection.has_data_to_send:
+                try:
+                    if connection.try_send():
+                        # All data sent
+                        if not connection._is_multipart:
+                            if connection._response_keep_alive:
+                                connection.reset()
+                            else:
+                                connection.close()
+                except OSError:
+                    self.remove_connection(connection)
+
+        # Check for pipelined requests already in buffer (after flushing writes)
         for connection in list(self._waiting_connections):
             if connection.socket is None:
                 self.remove_connection(connection)

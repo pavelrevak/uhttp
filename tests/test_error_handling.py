@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestErrorHandling(unittest.TestCase):
@@ -19,7 +19,7 @@ class TestErrorHandling(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server once for all tests"""
-        cls.server = uhttp.HttpServer(
+        cls.server = uhttp_server.HttpServer(
             port=cls.PORT,
             max_headers_length=2048,
             max_content_length=10240

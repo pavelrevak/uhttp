@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestDoubleResponse(unittest.TestCase):
@@ -20,7 +20,7 @@ class TestDoubleResponse(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server once for all tests"""
-        cls.server = uhttp.HttpServer(port=cls.PORT)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT)
 
         def run_server():
             try:
@@ -54,7 +54,7 @@ class TestDoubleResponse(unittest.TestCase):
                                 # Normal response for connection test
                                 client.respond({'message': 'OK'})
 
-                        except uhttp.HttpError:
+                        except uhttp_server.HttpError:
                             # Expected error - close connection
                             client.close()
 

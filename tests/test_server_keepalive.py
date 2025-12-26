@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp
+import uhttp_server
 
 
 class TestServerKeepAlive(unittest.TestCase):
@@ -20,7 +20,7 @@ class TestServerKeepAlive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Start server once for all tests"""
-        cls.server = uhttp.HttpServer(port=cls.PORT, keep_alive_max_requests=5)
+        cls.server = uhttp_server.HttpServer(port=cls.PORT, keep_alive_max_requests=5)
 
         def run_server():
             try:
