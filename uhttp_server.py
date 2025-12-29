@@ -3,6 +3,7 @@ python or micropython
 (c) 2022-2024 Pavel Revak <pavelrevak@gmail.com>
 """
 
+import os as _os
 import socket as _socket
 import select as _select
 import json as _json
@@ -16,6 +17,7 @@ LISTEN_SOCKETS = 2
 MAX_WAITING_CLIENTS = 5
 MAX_HEADERS_LENGTH = 4 * KB
 MAX_CONTENT_LENGTH = 512 * KB
+FILE_CHUNK_SIZE = 4 * KB  # bytes - chunk size for streaming file responses
 KEEP_ALIVE_TIMEOUT = 15  # seconds
 KEEP_ALIVE_MAX_REQUESTS = 100  # max requests per connection
 
@@ -261,12 +263,15 @@ class HttpConnection():
         self._is_multipart = False
         self._response_started = False
         self._response_keep_alive = False
+        self._file_handle = None
+        self._last_activity = _time.time()
+        self._requests_count = 0
         self._max_headers_length = kwargs.get(
             'max_headers_length', MAX_HEADERS_LENGTH)
         self._max_content_length = kwargs.get(
             'max_content_length', MAX_CONTENT_LENGTH)
-        self._last_activity = _time.time()
-        self._requests_count = 0
+        self._file_chunk_size = kwargs.get(
+            'file_chunk_size', FILE_CHUNK_SIZE)
         self._keep_alive_timeout = kwargs.get(
             'keep_alive_timeout', KEEP_ALIVE_TIMEOUT)
         self._keep_alive_max_requests = kwargs.get(
@@ -398,8 +403,8 @@ class HttpConnection():
 
     @property
     def has_data_to_send(self):
-        """True when there is data waiting to be sent"""
-        return len(self._send_buffer) > 0
+        """True when there is data waiting to be sent or file being streamed"""
+        return len(self._send_buffer) > 0 or self._file_handle is not None
 
     @property
     def content_type(self):
@@ -540,6 +545,31 @@ class HttpConnection():
         """Try to send data from send buffer, returns True if all sent"""
         if self._socket is None:
             return False
+
+        # If streaming file, read next chunk when buffer is low
+        if self._file_handle and len(self._send_buffer) < self._file_chunk_size:
+            try:
+                chunk = self._file_handle.read(self._file_chunk_size)
+                if chunk:
+                    self._send_buffer.extend(chunk)
+                else:
+                    # File fully read, close handle
+                    try:
+                        self._file_handle.close()
+                    except OSError:
+                        pass
+                    self._file_handle = None
+            except OSError:
+                # Error reading file, close handle and connection
+                if self._file_handle:
+                    try:
+                        self._file_handle.close()
+                    except OSError:
+                        pass
+                    self._file_handle = None
+                self.close()
+                return False
+
         if not self._send_buffer:
             return True
         try:
@@ -549,7 +579,7 @@ class HttpConnection():
                 return False
             if sent > 0:
                 self._send_buffer = self._send_buffer[sent:]
-            return len(self._send_buffer) == 0
+            return len(self._send_buffer) == 0 and self._file_handle is None
         except OSError as e:
             # EAGAIN/EWOULDBLOCK means socket buffer is full (non-blocking)
             errno = getattr(e, 'errno', None)
@@ -563,8 +593,55 @@ class HttpConnection():
         """Update last activity timestamp"""
         self._last_activity = _time.time()
 
+    def _should_keep_alive(self, response_headers=None):
+        """Determine if connection should be kept alive
+
+        Args:
+            response_headers: Optional dict of response headers to check for explicit Connection header
+
+        Returns:
+            bool: True if connection should be kept alive
+        """
+        # Check if response explicitly sets Connection header
+        if response_headers and CONNECTION in response_headers:
+            return response_headers[CONNECTION].lower() == CONNECTION_KEEP_ALIVE
+
+        # Auto-detect from request Connection header
+        req_connection = self.headers_get_attribute(CONNECTION, '').lower()
+
+        # HTTP/1.1 default: keep-alive, HTTP/1.0 requires explicit header
+        if self._protocol == 'HTTP/1.1':
+            keep_alive = req_connection != CONNECTION_CLOSE
+        else:
+            keep_alive = req_connection == CONNECTION_KEEP_ALIVE
+
+        # Disable keep-alive if max requests limit reached
+        # Note: timeout is checked separately in _cleanup_idle_connections()
+        if keep_alive and self.is_max_requests_reached:
+            keep_alive = False
+
+        return keep_alive
+
+    def _finalize_sent_response(self):
+        """Finalize connection after response fully sent (no buffered data)"""
+        # Don't close active multipart streams
+        if self._is_multipart:
+            return
+
+        if self._response_keep_alive:
+            self.reset()
+        else:
+            self.close()
+
     def reset(self):
         """Reset connection for next request (keep-alive)"""
+        # Close file handle if streaming
+        if self._file_handle:
+            try:
+                self._file_handle.close()
+            except OSError:
+                pass
+            self._file_handle = None
         # Don't clear buffer - may contain start of next request
         self._method = None
         self._url = None
@@ -582,6 +659,13 @@ class HttpConnection():
 
     def close(self):
         """Close connection"""
+        # Close file handle if streaming
+        if self._file_handle:
+            try:
+                self._file_handle.close()
+            except OSError:
+                pass
+            self._file_handle = None
         self._server.remove_connection(self)
         if self._socket:
             try:
@@ -620,10 +704,36 @@ class HttpConnection():
             raise ClientError from err
         return None
 
-    def respond(
-            self, data=None, status=200, headers=None, cookies=None,
-            keep_alive=None):
-        """Create general respond with data, status and headers as dict"""
+    def _build_response_header(self, status=200, headers=None, cookies=None):
+        """Build HTTP response header string
+
+        Connection header is added automatically based on keep-alive decision if not explicitly set.
+        To force connection close, set headers['connection'] = 'close'.
+        """
+        header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
+
+        if headers is None:
+            headers = {}
+
+        for key, val in headers.items():
+            header += f'{key}: {val}\r\n'
+
+        if cookies:
+            for key, val in cookies.items():
+                # TODO make support for attributes
+                if val is None:
+                    val = '; Max-Age=0'
+                header += f'{SET_COOKIE}: {key}={val}\r\n'
+
+        header += '\r\n'
+        return header
+
+    def respond(self, data=None, status=200, headers=None, cookies=None):
+        """Create general respond with data, status and headers as dict
+
+        To force connection close, set headers['connection'] = 'close'.
+        By default, HTTP/1.1 uses keep-alive, HTTP/1.0 closes connection.
+        """
         if self._socket is None:
             return
         if self._response_started:
@@ -631,41 +741,21 @@ class HttpConnection():
         self._response_started = True
         self._is_multipart = False
 
-        # Determine keep-alive behavior
-        if keep_alive is None:
-            # Auto-detect from request Connection header
-            req_connection = self.headers_get_attribute(CONNECTION, '').lower()
-            # HTTP/1.1 default: to keep-alive, HTTP/1.0 require explicit header
-            if self._protocol == 'HTTP/1.1':
-                keep_alive = req_connection != CONNECTION_CLOSE
-            else:
-                keep_alive = req_connection == CONNECTION_KEEP_ALIVE
-
-        # Disable keep-alive if limits reached
-        if keep_alive and (self.is_max_requests_reached or self.is_timed_out):
-            keep_alive = False
-
-        # Store keep-alive decision for event_write
-        self._response_keep_alive = keep_alive
-
-        header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
         if headers is None:
             headers = {}
         if data:
             data = encode_response_data(headers, data)
+
+        # Determine keep-alive behavior and add Connection header if not set
+        keep_alive = self._should_keep_alive(headers)
         if CONNECTION not in headers:
             headers[CONNECTION] = (
                 CONNECTION_KEEP_ALIVE if keep_alive else CONNECTION_CLOSE)
-        for key, val in headers.items():
-            header += f'{key}: {val}\r\n'
-        if cookies:
-            # Set-Cookie key can be repeated in header
-            for key, val in cookies.items():
-                # TODO make support for attributes
-                if val is None:
-                    val = '; Max-Age=0'
-                header += f'{SET_COOKIE}: {key}={val}\r\n'
-        header += '\r\n'
+
+        # Store keep-alive decision for event_write
+        self._response_keep_alive = keep_alive
+
+        header = self._build_response_header(status, headers=headers, cookies=cookies)
         try:
             # Send header and body together to avoid TCP packet splitting
             # This ensures pipelined responses arrive atomically
@@ -677,36 +767,62 @@ class HttpConnection():
                 self._send(header)
             # Close only if all data was sent, otherwise wait for write events
             if not self.has_data_to_send:
-                if keep_alive:
-                    self.reset()
-                else:
-                    self.close()
+                self._finalize_sent_response()
         except OSError:
             # ignore this error, client has been disconnected during sending
             self.close()
 
-    def respond_file(self, file_name, headers=None, keep_alive=None):
-        """Respond with file content, auto-detect content-type from extension"""
+    def respond_file(self, file_name, headers=None):
+        """Respond with file content, streaming asynchronously to minimize memory usage
+
+        To force connection close, set headers['connection'] = 'close'.
+        """
         if self._response_started:
             raise HttpError("Response already sent for this request")
         if headers is None:
             headers = {}
 
         try:
-            with open(file_name, 'rb') as f:
-                data = f.read()
-        except OSError:
-            self.respond(
-                data=f'File not found: {file_name}',
-                status=404, keep_alive=keep_alive)
+            file_size = _os.stat(file_name)[6]  # st_size
+        except (OSError, ImportError, AttributeError):
+            self.respond(data=f'File not found: {file_name}', status=404)
             return
 
-        # Set content-type based on file extension if not already set
         if CONTENT_TYPE not in headers:
             ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
             headers[CONTENT_TYPE] = CONTENT_TYPE_MAP.get(ext, CONTENT_TYPE_OCTET_STREAM)
 
-        self.respond(data=data, headers=headers, keep_alive=keep_alive)
+        # Build headers
+        headers[CONTENT_LENGTH] = file_size
+
+        # Determine keep-alive behavior and add Connection header if not set
+        keep_alive = self._should_keep_alive(headers)
+        if CONNECTION not in headers:
+            headers[CONNECTION] = (
+                CONNECTION_KEEP_ALIVE if keep_alive else CONNECTION_CLOSE)
+
+        # Prepare response
+        self._response_keep_alive = keep_alive
+        self._response_started = True
+        self._is_multipart = False
+
+        header = self._build_response_header(200, headers=headers)
+
+        try:
+            # Send headers
+            self._send(header)
+
+            # Open file for async streaming - chunks will be sent in try_send()
+            self._file_handle = open(file_name, 'rb')
+        except OSError:
+            # Error opening file or sending headers
+            if self._file_handle:
+                try:
+                    self._file_handle.close()
+                except OSError:
+                    pass
+                self._file_handle = None
+            self.close()
 
     def response_multipart(self, headers=None):
         """Create multipart respond with headers as dict"""
@@ -716,14 +832,13 @@ class HttpConnection():
             raise HttpError("Response already sent for this request")
         self._response_started = True
         self._is_multipart = True
-        header = f'{PROTOCOLS[-1]} {200} {STATUS_CODES[200]}\r\n'
+
         if headers is None:
             headers = {}
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_MULTIPART_REPLACE
-        for key, val in headers.items():
-            header += f'{key}: {val}\r\n'
-        header += '\r\n'
+
+        header = self._build_response_header(200, headers=headers)
         try:
             self._send(header)
         except OSError:
@@ -756,31 +871,21 @@ class HttpConnection():
             return False
         return True
 
-    def response_multipart_end(self, boundary=None, keep_alive=None):
+    def response_multipart_end(self, boundary=None):
         """Finish multipart stream"""
         if not boundary:
             boundary = BOUNDARY
         self._is_multipart = False
 
-        # Determine keep-alive behavior (same as respond())
-        if keep_alive is None:
-            req_connection = self.headers_get_attribute(CONNECTION, '').lower()
-            if self._protocol == 'HTTP/1.1':
-                keep_alive = req_connection != CONNECTION_CLOSE
-            else:
-                keep_alive = req_connection == CONNECTION_KEEP_ALIVE
-
-        # Disable keep-alive if limits reached
-        if keep_alive and (self.is_max_requests_reached or self.is_timed_out):
-            keep_alive = False
+        # Determine keep-alive behavior (multipart was started without Connection header)
+        # Use default protocol behavior
+        keep_alive = self._should_keep_alive()
+        self._response_keep_alive = keep_alive
 
         try:
             self._send(f'--{boundary}--\r\n')
             if not self.has_data_to_send:
-                if keep_alive:
-                    self.reset()
-                else:
-                    self.close()
+                self._finalize_sent_response()
         except OSError:
             self.close()
 
@@ -815,7 +920,7 @@ class HttpServer():
         read_sockets = [
             con.socket
             for con in self._waiting_connections
-            if con.socket is not None and self._is_socket_valid(con.socket)]
+            if con.socket is not None]
         if self._socket:
             read_sockets.append(self._socket)
         return read_sockets
@@ -826,17 +931,7 @@ class HttpServer():
         return [
             con.socket
             for con in self._waiting_connections
-            if con.socket is not None and self._is_socket_valid(con.socket) and con.has_data_to_send]
-
-    def _is_socket_valid(self, sock):
-        """Check if socket is valid (MicroPython compatible)"""
-        try:
-            # Try to use fileno() if available (CPython and some MicroPython)
-            return sock.fileno() > 0
-        except (OSError, AttributeError):
-            # If fileno() not available or fails, assume socket is valid
-            # MicroPython sockets may not have fileno()
-            return True
+            if con.socket is not None and con.has_data_to_send]
 
     def close(self):
         """Close HTTP server"""
@@ -927,36 +1022,22 @@ class HttpServer():
                     if connection.try_send():
                         # All data sent
                         # (connection is still in waiting list after respond() if data was buffered)
-                        # Don't close active multipart streams
-                        if not connection._is_multipart:
-                            if connection._response_keep_alive:
-                                connection.reset()
-                            else:
-                                connection.close()
+                        connection._finalize_sent_response()
                 except OSError:
                     self.remove_connection(connection)
 
-    def wait(self, timeout=1):
-        """Wait for new clients with specified timeout,
-        returns None or instance of HttpConnection with established connection"""
-        self._cleanup_idle_connections()
-
-        # First, try to flush any pending buffered data before checking pipelined requests
-        # This ensures responses are sent in correct order (RFC 2616 pipelining)
+    def _flush_pending_sends(self):
+        """Try to flush any pending buffered data"""
         for connection in list(self._waiting_connections):
             if connection.socket is not None and connection.has_data_to_send:
                 try:
                     if connection.try_send():
-                        # All data sent
-                        if not connection._is_multipart:
-                            if connection._response_keep_alive:
-                                connection.reset()
-                            else:
-                                connection.close()
+                        connection._finalize_sent_response()
                 except OSError:
                     self.remove_connection(connection)
 
-        # Check for pipelined requests already in buffer (after flushing writes)
+    def _check_pipelined_requests(self):
+        """Check for pipelined requests already in buffer, returns first loaded connection"""
         for connection in list(self._waiting_connections):
             if connection.socket is None:
                 self.remove_connection(connection)
@@ -971,11 +1052,45 @@ class HttpServer():
                         return connection
                 except ClientError:
                     self.remove_connection(connection)
+        return None
 
-        read_sockets, write_sockets, _ = _select.select(
-            self.read_sockets, self.write_sockets, [], timeout)
+    def process_events(self, read_sockets, write_sockets):
+        """Process select results, returns loaded connection or None
+
+        This allows using external select with multiple servers/sockets:
+
+        Example:
+            server1 = HttpServer(port=80)
+            server2 = HttpServer(port=443, ssl_context=ctx)
+
+            read_all = server1.read_sockets + server2.read_sockets
+            write_all = server1.write_sockets + server2.write_sockets
+            r, w, _ = select.select(read_all, write_all, [], timeout)
+
+            client = server1.process_events(r, w) or server2.process_events(r, w)
+        """
         if write_sockets:
             self.event_write(write_sockets)
         if read_sockets:
             return self.event_read(read_sockets)
         return None
+
+    def wait(self, timeout=1):
+        """Wait for new clients with specified timeout,
+        returns None or instance of HttpConnection with established connection"""
+        self._cleanup_idle_connections()
+
+        # First, try to flush any pending buffered data before checking pipelined requests
+        # This ensures responses are sent in correct order (RFC 2616 pipelining)
+        self._flush_pending_sends()
+
+        # Check for pipelined requests already in buffer (after flushing writes)
+        connection = self._check_pipelined_requests()
+        if connection:
+            return connection
+
+        # Wait for socket events
+        read_sockets, write_sockets, _ = _select.select(
+            self.read_sockets, self.write_sockets, [], timeout)
+
+        return self.process_events(read_sockets, write_sockets)
