@@ -387,11 +387,6 @@ class HttpConnection():
         return self._method and (not self.content_length or self._data)
 
     @property
-    def is_waiting_for_response(self):
-        """True when request is loaded but response not yet started"""
-        return self.is_loaded and not self._response_started
-
-    @property
     def is_timed_out(self):
         """True when connection has been idle too long"""
         return (_time.time() - self._last_activity) > self._keep_alive_timeout
@@ -628,6 +623,13 @@ class HttpConnection():
         if self._is_multipart:
             return
 
+        # Pipelined request detected (data in buffer) - close connection
+        # Pipelining is not supported, we only handle one request per connection cycle
+        if len(self._buffer) > 0:
+            self._buffer = bytearray()
+            self.close()
+            return
+
         if self._response_keep_alive:
             self.reset()
         else:
@@ -685,9 +687,6 @@ class HttpConnection():
         if self._socket is None:
             return None
         if self._is_multipart:
-            return False
-        # Don't process next pipelined request until current one gets response
-        if self.is_waiting_for_response:
             return False
         try:
             if self._method is None:
@@ -1036,24 +1035,6 @@ class HttpServer():
                 except OSError:
                     self.remove_connection(connection)
 
-    def _check_pipelined_requests(self):
-        """Check for pipelined requests already in buffer, returns first loaded connection"""
-        for connection in list(self._waiting_connections):
-            if connection.socket is None:
-                self.remove_connection(connection)
-                continue
-            # Skip connections waiting for response (pipelining order preservation)
-            if connection.is_waiting_for_response:
-                continue
-            # If buffer has data and not currently loaded, try to process
-            if len(connection._buffer) > 0 and not connection.is_loaded:
-                try:
-                    if connection.process_request():
-                        return connection
-                except ClientError:
-                    self.remove_connection(connection)
-        return None
-
     def process_events(self, read_sockets, write_sockets):
         """Process select results, returns loaded connection or None
 
@@ -1079,17 +1060,8 @@ class HttpServer():
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
         self._cleanup_idle_connections()
-
-        # First, try to flush any pending buffered data before checking pipelined requests
-        # This ensures responses are sent in correct order (RFC 2616 pipelining)
         self._flush_pending_sends()
 
-        # Check for pipelined requests already in buffer (after flushing writes)
-        connection = self._check_pipelined_requests()
-        if connection:
-            return connection
-
-        # Wait for socket events
         read_sockets, write_sockets, _ = _select.select(
             self.read_sockets, self.write_sockets, [], timeout)
 

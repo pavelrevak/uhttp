@@ -217,8 +217,8 @@ class TestKeepAlive(unittest.TestCase):
         finally:
             sock.close()
 
-    def test_pipelined_keep_alive_requests(self):
-        """Test multiple pipelined requests on keep-alive connection"""
+    def test_pipelined_requests_not_supported(self):
+        """Test that pipelined requests are not supported - only first processed"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             sock.connect(('localhost', self.PORT))
@@ -231,7 +231,7 @@ class TestKeepAlive(unittest.TestCase):
             )
             sock.sendall(pipelined)
 
-            # Read both responses
+            # Read response
             all_data = b""
             try:
                 while len(all_data) < 8192:
@@ -239,18 +239,15 @@ class TestKeepAlive(unittest.TestCase):
                     if not chunk:
                         break
                     all_data += chunk
-                    # Check if we have both responses
-                    if all_data.count(b"200 OK") >= 2:
-                        break
             except socket.timeout:
                 pass
 
             all_str = all_data.decode()
 
-            # Verify both responses present
+            # Only first request processed, connection closed
             self.assertIn("/pipe1", all_str)
-            self.assertIn("/pipe2", all_str)
-            self.assertGreaterEqual(all_str.count("200 OK"), 2)
+            self.assertNotIn("/pipe2", all_str)
+            self.assertEqual(all_str.count("200 OK"), 1)
 
         finally:
             sock.close()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Test HTTP pipelining - sending multiple requests in one TCP packet
+Test that HTTP pipelining is NOT supported - server processes only first request
+and closes connection when pipelined data is detected.
 """
 import unittest
 import socket
@@ -9,8 +10,8 @@ import threading
 import uhttp_server
 
 
-class TestPipelining(unittest.TestCase):
-    """Test suite for HTTP pipelining"""
+class TestPipeliningNotSupported(unittest.TestCase):
+    """Test that pipelining is rejected"""
 
     server = None
     server_thread = None
@@ -49,10 +50,10 @@ class TestPipelining(unittest.TestCase):
 
     def setUp(self):
         """Reset request count before each test"""
-        TestPipelining.request_count = 0
+        TestPipeliningNotSupported.request_count = 0
 
-    def test_pipelining_get_requests(self):
-        """Test sending multiple GET requests in one packet"""
+    def test_pipelining_only_first_request_processed(self):
+        """Test that only first pipelined request is processed, connection closed"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(('localhost', self.PORT))
 
@@ -70,11 +71,11 @@ class TestPipelining(unittest.TestCase):
 
         sock.sendall(pipelined_requests)
 
-        # Read all data (both responses may come together)
+        # Read response
         sock.settimeout(1.0)
         all_data = b""
         try:
-            while len(all_data) < 8192:  # Read up to 8KB
+            while len(all_data) < 8192:
                 chunk = sock.recv(4096)
                 if not chunk:
                     break
@@ -83,23 +84,16 @@ class TestPipelining(unittest.TestCase):
             pass
 
         sock.close()
+        time.sleep(0.2)
 
-        # Split responses by finding HTTP status lines
-        parts = all_data.split(b"HTTP/1.1 200 OK")
+        # Only first request should be processed
+        self.assertEqual(self.request_count, 1)
+        self.assertIn(b"/test1", all_data)
+        # Second request should NOT be in response
+        self.assertNotIn(b"/test2", all_data)
 
-        # Verify both responses received
-        self.assertGreaterEqual(len(parts), 3)  # Empty + response1 + response2
-        response1 = b"HTTP/1.1 200 OK" + parts[1]
-        response2 = b"HTTP/1.1 200 OK" + parts[2]
-
-        self.assertIn(b"200 OK", response1)
-        self.assertIn(b"test1", response1)
-        self.assertIn(b"200 OK", response2)
-        self.assertIn(b"test2", response2)
-        self.assertEqual(self.request_count, 2)
-
-    def test_pipelining_post_and_get(self):
-        """Test pipelining POST with body and GET request"""
+    def test_pipelining_post_only_first_processed(self):
+        """Test pipelining with POST - only first request processed"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(('localhost', self.PORT))
 
@@ -120,11 +114,11 @@ class TestPipelining(unittest.TestCase):
 
         sock.sendall(pipelined_requests)
 
-        # Read all data (both responses may come together)
+        # Read response
         sock.settimeout(1.0)
         all_data = b""
         try:
-            while len(all_data) < 8192:  # Read up to 8KB
+            while len(all_data) < 8192:
                 chunk = sock.recv(4096)
                 if not chunk:
                     break
@@ -133,20 +127,13 @@ class TestPipelining(unittest.TestCase):
             pass
 
         sock.close()
+        time.sleep(0.2)
 
-        # Split responses by finding HTTP status lines
-        parts = all_data.split(b"HTTP/1.1 200 OK")
-
-        # Verify both responses received
-        self.assertGreaterEqual(len(parts), 3)  # Empty + response1 + response2
-        response1 = b"HTTP/1.1 200 OK" + parts[1]
-        response2 = b"HTTP/1.1 200 OK" + parts[2]
-
-        self.assertIn(b"200 OK", response1)
-        self.assertIn(b"/api", response1)
-        self.assertIn(b"200 OK", response2)
-        self.assertIn(b"/status", response2)
-        self.assertEqual(self.request_count, 2)
+        # Only first request (POST) should be processed
+        self.assertEqual(self.request_count, 1)
+        self.assertIn(b"/api", all_data)
+        # Second request should NOT be processed
+        self.assertNotIn(b"/status", all_data)
 
 
 if __name__ == '__main__':
