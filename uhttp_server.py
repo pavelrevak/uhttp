@@ -503,29 +503,17 @@ class HttpConnection():
             self._process_data()
 
     def _read_headers(self):
-        # Check if headers are already complete in buffer (pipelining support)
-        for delimiter in HEADERS_DELIMITERS:
-            if delimiter in self._buffer:
-                end_index = self._buffer.index(delimiter)
-                end_index += len(delimiter)
-                header_lines = self._buffer[:end_index].splitlines()
-                self._buffer = self._buffer[end_index:]
-                self._process_headers(header_lines)
-                return
-
-        # Headers not complete, read more data from socket
         self._recv_to_buffer(self._max_headers_length)
         for delimiter in HEADERS_DELIMITERS:
             if delimiter in self._buffer:
-                end_index = self._buffer.index(delimiter)
-                end_index += len(delimiter)
+                end_index = self._buffer.index(delimiter) + len(delimiter)
                 header_lines = self._buffer[:end_index].splitlines()
                 self._buffer = self._buffer[end_index:]
                 self._process_headers(header_lines)
                 return
         if len(self._buffer) >= self._max_headers_length:
             raise HttpErrorWithResponse(
-                431, f"({self._buffer} > {self._max_headers_length} Bytes)")
+                431, f"({len(self._buffer)} > {self._max_headers_length} Bytes)")
 
     def _send(self, data):
         """Add data to send buffer for async sending"""
@@ -644,7 +632,6 @@ class HttpConnection():
             except OSError:
                 pass
             self._file_handle = None
-        # Don't clear buffer - may contain start of next request
         self._method = None
         self._url = None
         self._protocol = None
@@ -709,23 +696,21 @@ class HttpConnection():
         Connection header is added automatically based on keep-alive decision if not explicitly set.
         To force connection close, set headers['connection'] = 'close'.
         """
-        header = f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}\r\n'
+        parts = [f'{PROTOCOLS[-1]} {status} {STATUS_CODES[status]}']
 
-        if headers is None:
-            headers = {}
-
-        for key, val in headers.items():
-            header += f'{key}: {val}\r\n'
+        if headers:
+            for key, val in headers.items():
+                parts.append(f'{key}: {val}')
 
         if cookies:
             for key, val in cookies.items():
                 # TODO make support for attributes
                 if val is None:
                     val = '; Max-Age=0'
-                header += f'{SET_COOKIE}: {key}={val}\r\n'
+                parts.append(f'{SET_COOKIE}: {key}={val}')
 
-        header += '\r\n'
-        return header
+        parts.append('\r\n')
+        return '\r\n'.join(parts)
 
     def respond(self, data=None, status=200, headers=None, cookies=None):
         """Create general respond with data, status and headers as dict
