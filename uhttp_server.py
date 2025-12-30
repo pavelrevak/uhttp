@@ -995,20 +995,29 @@ class HttpServer():
     def event_read(self, sockets):
         """Process sockets with read_event,
         returns None or instance of HttpConnection with established connection"""
+        result = None
+
         if self._socket in sockets:
             self._accept()
-            return None
-        for connection in list(self._waiting_connections):
-            if connection.socket is None:
-                self.remove_connection(connection)
-                continue
-            if connection.socket in sockets:
-                try:
-                    if connection.process_request():
-                        return connection
-                except ClientError:
+            # result stays None, but continue to cleanup
+        else:
+            for connection in list(self._waiting_connections):
+                if connection.socket is None:
                     self.remove_connection(connection)
-        return None
+                    continue
+                if connection.socket in sockets:
+                    try:
+                        if connection.process_request():
+                            result = connection
+                            break
+                    except ClientError:
+                        self.remove_connection(connection)
+
+        # Cleanup at the end - after processing active connections
+        # This ensures recently active connections are not timed out
+        self._cleanup_idle_connections()
+
+        return result
 
     def event_write(self, sockets):
         """Process sockets with write_event, send buffered data"""
@@ -1025,8 +1034,15 @@ class HttpServer():
                 except OSError:
                     self.remove_connection(connection)
 
-    def _flush_pending_sends(self):
-        """Try to flush any pending buffered data"""
+    def flush_pending_sends(self):
+        """Try to flush any pending buffered data
+
+        This is important for SSL connections where data may be buffered
+        in the SSL layer. Call this before select() when using external
+        select loop to ensure SSL pending data is sent.
+
+        For simple use cases with wait(), this is called automatically.
+        """
         for connection in list(self._waiting_connections):
             if connection.socket is not None and connection.has_data_to_send:
                 try:
@@ -1059,8 +1075,7 @@ class HttpServer():
     def wait(self, timeout=1):
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
-        self._cleanup_idle_connections()
-        self._flush_pending_sends()
+        self.flush_pending_sends()
 
         read_sockets, write_sockets, _ = _select.select(
             self.read_sockets, self.write_sockets, [], timeout)

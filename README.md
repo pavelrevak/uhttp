@@ -179,27 +179,25 @@ http_server = uhttp_server.HttpServer(port=80)
 https_server = uhttp_server.HttpServer(port=443, ssl_context=context)
 
 while True:
+    # Flush pending SSL data before select (only needed for HTTPS)
+    https_server.flush_pending_sends()
+
     r, w, _ = select.select(
         http_server.read_sockets + https_server.read_sockets,
         http_server.write_sockets + https_server.write_sockets,
         [], 1.0
     )
 
-    if w:
-        http_server.event_write(w)
-        https_server.event_write(w)
+    # Redirect HTTP to HTTPS
+    http_client = http_server.process_events(r, w)
+    if http_client:
+        https_url = f"https://{http_client.host}{http_client.url}"
+        http_client.respond_redirect(https_url)
 
-    if r:
-        # Redirect HTTP to HTTPS
-        http_client = http_server.event_read(r)
-        if http_client:
-            https_url = f"https://{http_client.host}{http_client.url}"
-            http_client.respond_redirect(https_url)
-
-        # Serve HTTPS content
-        https_client = https_server.event_read(r)
-        if https_client:
-            https_client.respond({'message': 'Secure content'})
+    # Serve HTTPS content
+    https_client = https_server.process_events(r, w)
+    if https_client:
+        https_client.respond({'message': 'Secure content'})
 ```
 
 ### Testing SSL Locally
@@ -277,17 +275,25 @@ Parameters:
 
 **`read_sockets(self)`**
 
-- All sockets waiting for communication, used for select
+- All sockets waiting for read, used for select
+
+**`write_sockets(self)`**
+
+- All sockets with data to send, used for select
 
 #### Methods:
 
-**`process_events(self, read_events)`**
+**`flush_pending_sends(self)`**
 
-- Process sockets with read_events, returns None or instance of HttpClient with established connection
+- Try to flush any pending buffered data. Important for SSL connections where data may be buffered in the SSL layer. Call this before select() when using external select loop.
+
+**`process_events(self, read_sockets, write_sockets)`**
+
+- Process select results, returns None or instance of HttpClient with established connection
 
 **`wait(self, timeout=1)`**
 
-- Wait for new clients with specified timeout, returns None or instance of HttpClient with established connection
+- Wait for new clients with specified timeout, returns None or instance of HttpClient with established connection. Calls flush_pending_sends() automatically.
 
 
 ### Class `HttpClient`:

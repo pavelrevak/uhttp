@@ -227,9 +227,10 @@ class TestKeepAliveTimeout(unittest.TestCase):
 
                 if b'\r\n\r\n' in response and content_length is None:
                     headers = response.split(b'\r\n\r\n')[0].decode()
-                    if 'Content-Length:' in headers:
+                    headers_lower = headers.lower()
+                    if 'content-length:' in headers_lower:
                         content_length_line = [l for l in headers.split('\r\n')
-                                               if 'Content-Length' in l][0]
+                                               if 'content-length' in l.lower()][0]
                         content_length = int(content_length_line.split(':')[1].strip())
                         body_start = response.index(b'\r\n\r\n') + 4
 
@@ -241,6 +242,14 @@ class TestKeepAliveTimeout(unittest.TestCase):
 
             # Wait for timeout (2s) + margin
             time.sleep(2.5)
+
+            # Trigger a read event with a new connection to cause cleanup
+            # (idle connection cleanup happens at the end of event_read)
+            trigger_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            trigger_sock.connect(('localhost', self.PORT))
+            trigger_sock.send(b"GET /trigger HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            trigger_sock.recv(1024)
+            trigger_sock.close()
 
             # Try second request - should fail or get 408
             request2 = b"GET /test2 HTTP/1.1\r\nHost: localhost\r\n\r\n"
