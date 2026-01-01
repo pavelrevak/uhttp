@@ -4,6 +4,7 @@ python or micropython
 """
 
 import os as _os
+import errno
 import socket as _socket
 import select as _select
 import json as _json
@@ -383,7 +384,9 @@ class HttpConnection():
 
     @property
     def is_loaded(self):
-        """True when request is fully loaded"""
+        """True when request is fully loaded and ready for response"""
+        if self._response_started:
+            return False  # Response already in progress
         return self._method and (not self.content_length or self._data)
 
     @property
@@ -432,9 +435,7 @@ class HttpConnection():
         try:
             buffer = self._socket_recv(size - len(self._buffer))
         except OSError as err:
-            # EAGAIN/EWOULDBLOCK means no data available (non-blocking socket)
-            errno = getattr(err, 'errno', None)
-            if errno in (11, 35):  # EAGAIN, EWOULDBLOCK
+            if err.errno == errno.EAGAIN:
                 return  # Not an error, just no data yet
             raise HttpDisconnected(f"{err}: {self.addr}") from err
         if not buffer:
@@ -563,10 +564,9 @@ class HttpConnection():
             if sent > 0:
                 self._send_buffer = self._send_buffer[sent:]
             return len(self._send_buffer) == 0 and self._file_handle is None
-        except OSError as e:
+        except OSError as err:
             # EAGAIN/EWOULDBLOCK means socket buffer is full (non-blocking)
-            errno = getattr(e, 'errno', None)
-            if errno in (11, 35):  # EAGAIN, EWOULDBLOCK
+            if err.errno == errno.EAGAIN:
                 return False
             # Other errors are real connection problems
             self.close()
@@ -901,10 +901,7 @@ class HttpServer():
     @property
     def read_sockets(self):
         """All sockets waiting for communication, used for select"""
-        read_sockets = [
-            con.socket
-            for con in self._waiting_connections
-            if con.socket is not None]
+        read_sockets = [con.socket for con in self._waiting_connections]
         if self._socket:
             read_sockets.append(self._socket)
         return read_sockets
@@ -912,10 +909,7 @@ class HttpServer():
     @property
     def write_sockets(self):
         """All sockets with data to send, used for select"""
-        return [
-            con.socket
-            for con in self._waiting_connections
-            if con.socket is not None and con.has_data_to_send]
+        return [con.socket for con in self._waiting_connections if con.has_data_to_send]
 
     def close(self):
         """Close HTTP server"""
@@ -935,8 +929,9 @@ class HttpServer():
         for connection in list(self._waiting_connections):
             # Only timeout connections that are waiting for new request (not loaded)
             if not connection.is_loaded and connection.is_timed_out:
-                connection.respond('Request Timeout', status=408)
-                self.remove_connection(connection)
+                connection.respond(
+                    'Request Timeout', status=408,
+                    headers={CONNECTION: CONNECTION_CLOSE})
 
     def _accept(self):
         try:
@@ -974,7 +969,8 @@ class HttpServer():
         while len(self._waiting_connections) > self._max_clients:
             connection_to_remove = self._waiting_connections.pop(0)
             connection_to_remove.respond(
-                'Request Timeout, too many requests', status=408)
+                'Request Timeout, too many requests', status=408,
+                headers={CONNECTION: CONNECTION_CLOSE})
         self._waiting_connections.append(connection)
 
     def event_read(self, sockets):
@@ -987,16 +983,13 @@ class HttpServer():
             # result stays None, but continue to cleanup
         else:
             for connection in list(self._waiting_connections):
-                if connection.socket is None:
-                    self.remove_connection(connection)
-                    continue
                 if connection.socket in sockets:
                     try:
                         if connection.process_request():
                             result = connection
                             break
                     except ClientError:
-                        self.remove_connection(connection)
+                        connection.close()
 
         # Cleanup at the end - after processing active connections
         # This ensures recently active connections are not timed out
@@ -1007,9 +1000,6 @@ class HttpServer():
     def event_write(self, sockets):
         """Process sockets with write_event, send buffered data"""
         for connection in list(self._waiting_connections):
-            if connection.socket is None:
-                self.remove_connection(connection)
-                continue
             if connection.socket in sockets:
                 try:
                     if connection.try_send():
@@ -1017,7 +1007,7 @@ class HttpServer():
                         # (connection is still in waiting list after respond() if data was buffered)
                         connection._finalize_sent_response()
                 except OSError:
-                    self.remove_connection(connection)
+                    connection.close()
 
     def flush_pending_sends(self):
         """Try to flush any pending buffered data
@@ -1029,12 +1019,12 @@ class HttpServer():
         For simple use cases with wait(), this is called automatically.
         """
         for connection in list(self._waiting_connections):
-            if connection.socket is not None and connection.has_data_to_send:
+            if connection.has_data_to_send:
                 try:
                     if connection.try_send():
                         connection._finalize_sent_response()
                 except OSError:
-                    self.remove_connection(connection)
+                    connection.close()
 
     def process_events(self, read_sockets, write_sockets):
         """Process select results, returns loaded connection or None
