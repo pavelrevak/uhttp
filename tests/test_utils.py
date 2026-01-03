@@ -35,6 +35,63 @@ class TestDecodePercentEncoding(unittest.TestCase):
         self.assertEqual(res, bytes(range(256)))
 
 
+class TestSplitIter(unittest.TestCase):
+
+    def test_basic_split(self):
+        result = list(uhttp_server.split_iter('a;b;c', ';'))
+        self.assertEqual(result, ['a', 'b', 'c'])
+
+    def test_bytes_split(self):
+        result = list(uhttp_server.split_iter(b'a&b&c', b'&'))
+        self.assertEqual(result, [b'a', b'b', b'c'])
+
+    def test_single_element(self):
+        result = list(uhttp_server.split_iter('abc', ';'))
+        self.assertEqual(result, ['abc'])
+
+    def test_empty_string(self):
+        result = list(uhttp_server.split_iter('', ';'))
+        self.assertEqual(result, [''])
+
+    def test_empty_parts(self):
+        result = list(uhttp_server.split_iter('a;;b', ';'))
+        self.assertEqual(result, ['a', '', 'b'])
+
+    def test_trailing_separator(self):
+        result = list(uhttp_server.split_iter('a;b;', ';'))
+        self.assertEqual(result, ['a', 'b', ''])
+
+    def test_leading_separator(self):
+        result = list(uhttp_server.split_iter(';a;b', ';'))
+        self.assertEqual(result, ['', 'a', 'b'])
+
+    def test_multi_char_separator(self):
+        result = list(uhttp_server.split_iter('a::b::c', '::'))
+        self.assertEqual(result, ['a', 'b', 'c'])
+
+    def test_generator_behavior(self):
+        gen = uhttp_server.split_iter('a;b;c', ';')
+        self.assertEqual(next(gen), 'a')
+        self.assertEqual(next(gen), 'b')
+        self.assertEqual(next(gen), 'c')
+        with self.assertRaises(StopIteration):
+            next(gen)
+
+    def test_matches_split_str(self):
+        test_cases = ['a;b;c', ';a;b', 'a;b;', ';;', 'abc', '']
+        for case in test_cases:
+            self.assertEqual(
+                list(uhttp_server.split_iter(case, ';')),
+                case.split(';'))
+
+    def test_matches_split_bytes(self):
+        test_cases = [b'a&b&c', b'&a&b', b'a&b&', b'&&', b'abc', b'']
+        for case in test_cases:
+            self.assertEqual(
+                list(uhttp_server.split_iter(case, b'&')),
+                case.split(b'&'))
+
+
 class TestParseHeaderParameters(unittest.TestCase):
 
     def test_parse_header_parameters(self):

@@ -143,10 +143,22 @@ def decode_percent_encoding(data):
     return bytes(res)
 
 
+def split_iter(data, sep):
+    """Split data by separator, yielding parts without allocating full list"""
+    start = 0
+    while True:
+        pos = data.find(sep, start)
+        if pos == -1:
+            yield data[start:]
+            break
+        yield data[start:pos]
+        start = pos + len(sep)
+
+
 def parse_header_parameters(value):
     """Parse parameters/directives from header value, returns dict"""
     directives = {}
-    for part in value.split(';'):
+    for part in split_iter(value, ';'):
         if '=' in part:
             key, val = part.split('=', 1)
             directives[key.strip()] = val.strip().strip('"')
@@ -159,7 +171,7 @@ def parse_query(raw_query, query=None):
     """Parse raw_query from URL, append it to existing query, returns dict"""
     if query is None:
         query = {}
-    for query_part in raw_query.split(b'&'):
+    for query_part in split_iter(raw_query, b'&'):
         if query_part:
             try:
                 if b'=' in query_part:
@@ -354,7 +366,7 @@ class HttpConnection():
             self._cookies = {}
             raw_cookies = self.headers_get_attribute(COOKIE)
             if raw_cookies:
-                for cookie_param in self.headers_get_attribute(COOKIE).split(';'):
+                for cookie_param in split_iter(raw_cookies, ';'):
                     if '=' in cookie_param:
                         key, val = cookie_param.split('=')
                         key = key.strip()
