@@ -438,6 +438,8 @@ class HttpConnection():
             if err.errno == errno.EAGAIN:
                 return  # Not an error, just no data yet
             raise HttpDisconnected(f"{err}: {self.addr}") from err
+        except MemoryError as err:
+            raise HttpErrorWithResponse(413) from err
         if not buffer:
             raise HttpDisconnected(f"Lost connection from client {self.addr}")
         self._rx_bytes_counter += len(buffer)
@@ -464,23 +466,24 @@ class HttpConnection():
     def _process_data(self):
         if len(self._buffer) < self.content_length:
             return
-        # Extract only content_length bytes from buffer
-        data_bytes = bytes(self._buffer[:self.content_length])
-        # Keep remaining bytes in buffer for next request (keep-alive)
-        self._buffer = self._buffer[self.content_length:]
 
-        value = self.content_type
-        content_type_parts = parse_header_parameters(value)
+        # Reject pipelining - extra data beyond content_length
+        if len(self._buffer) > self.content_length:
+            raise HttpErrorWithResponse(400, "Unexpected data after body")
+
+        # Buffer has exactly content_length bytes - use directly
+        content_type_parts = parse_header_parameters(self.content_type)
         if CONTENT_TYPE_XFORMDATA in content_type_parts:
-            self._data = parse_query(data_bytes)
+            self._data = parse_query(self._buffer)
         elif CONTENT_TYPE_JSON in content_type_parts:
             try:
-                self._data = _json.loads(data_bytes)
+                self._data = _json.loads(self._buffer)
             except ValueError as err:
                 raise HttpErrorWithResponse(
                     400, f"ERROR: Json decode: {err}") from err
         else:
-            self._data = data_bytes
+            self._data = self._buffer
+        self._buffer = bytearray()
 
     def _process_headers(self, header_lines):
         self._headers = {}
@@ -526,9 +529,9 @@ class HttpConnection():
         self.try_send()
 
     def try_send(self):
-        """Try to send data from send buffer, returns True if all sent"""
+        """Try to send data from send buffer, finalize when complete"""
         if self._socket is None:
-            return False
+            return
 
         # If streaming file, read next chunk when buffer is low
         if self._file_handle and len(self._send_buffer) < self._file_chunk_size:
@@ -552,25 +555,26 @@ class HttpConnection():
                         pass
                     self._file_handle = None
                 self.close()
-                return False
+                return
 
         if not self._send_buffer:
-            return True
+            self._finalize_sent_response()
+            return
         try:
             sent = self._socket_send(self._send_buffer)
             # MicroPython SSL may return None instead of bytes sent when buffer full
             if sent is None:
-                return False
+                return
             if sent > 0:
                 self._send_buffer = self._send_buffer[sent:]
-            return len(self._send_buffer) == 0 and self._file_handle is None
+            if len(self._send_buffer) == 0 and self._file_handle is None:
+                self._finalize_sent_response()
         except OSError as err:
             # EAGAIN/EWOULDBLOCK means socket buffer is full (non-blocking)
             if err.errno == errno.EAGAIN:
-                return False
+                return
             # Other errors are real connection problems
             self.close()
-            return False
 
     def update_activity(self):
         """Update last activity timestamp"""
@@ -607,15 +611,12 @@ class HttpConnection():
 
     def _finalize_sent_response(self):
         """Finalize connection after response fully sent (no buffered data)"""
-        # Don't close active multipart streams
-        if self._is_multipart:
+        # Only finalize if response was started
+        if not self._response_started:
             return
 
-        # Pipelined request detected (data in buffer) - close connection
-        # Pipelining is not supported, we only handle one request per connection cycle
-        if len(self._buffer) > 0:
-            self._buffer = bytearray()
-            self.close()
+        # Don't close active multipart streams
+        if self._is_multipart:
             return
 
         if self._response_keep_alive:
@@ -686,8 +687,8 @@ class HttpConnection():
                 self._requests_count += 1
             return self.is_loaded
         except HttpErrorWithResponse as err:
-            self.respond(data=str(err), status=err.status)
-            raise ClientError from err
+            self.respond(data=str(err), status=err.status,
+                         headers={CONNECTION: CONNECTION_CLOSE})
         return None
 
     def _build_response_header(self, status=200, headers=None, cookies=None):
@@ -793,11 +794,11 @@ class HttpConnection():
         header = self._build_response_header(200, headers=headers)
 
         try:
+            # Open file BEFORE sending headers (so try_send knows streaming is active)
+            self._file_handle = open(file_name, 'rb')
+
             # Send headers
             self._send(header)
-
-            # Open file for async streaming - chunks will be sent in try_send()
-            self._file_handle = open(file_name, 'rb')
         except OSError:
             # Error opening file or sending headers
             if self._file_handle:
@@ -951,6 +952,7 @@ class HttpServer():
             try:
                 cl_socket = self._ssl_context.wrap_socket(
                     cl_socket, server_side=True)
+                # cl_socket.setblocking(False)
             except OSError:
                 # SSL handshake failed
                 try:
@@ -980,7 +982,6 @@ class HttpServer():
 
         if self._socket in sockets:
             self._accept()
-            # result stays None, but continue to cleanup
         else:
             for connection in list(self._waiting_connections):
                 if connection.socket in sockets:
@@ -1001,30 +1002,7 @@ class HttpServer():
         """Process sockets with write_event, send buffered data"""
         for connection in list(self._waiting_connections):
             if connection.socket in sockets:
-                try:
-                    if connection.try_send():
-                        # All data sent
-                        # (connection is still in waiting list after respond() if data was buffered)
-                        connection._finalize_sent_response()
-                except OSError:
-                    connection.close()
-
-    def flush_pending_sends(self):
-        """Try to flush any pending buffered data
-
-        This is important for SSL connections where data may be buffered
-        in the SSL layer. Call this before select() when using external
-        select loop to ensure SSL pending data is sent.
-
-        For simple use cases with wait(), this is called automatically.
-        """
-        for connection in list(self._waiting_connections):
-            if connection.has_data_to_send:
-                try:
-                    if connection.try_send():
-                        connection._finalize_sent_response()
-                except OSError:
-                    connection.close()
+                connection.try_send()
 
     def process_events(self, read_sockets, write_sockets):
         """Process select results, returns loaded connection or None
@@ -1050,9 +1028,7 @@ class HttpServer():
     def wait(self, timeout=1):
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
-        self.flush_pending_sends()
-
+        self.event_write(self.write_sockets)
         read_sockets, write_sockets, _ = _select.select(
             self.read_sockets, self.write_sockets, [], timeout)
-
         return self.process_events(read_sockets, write_sockets)

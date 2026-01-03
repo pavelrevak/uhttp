@@ -59,7 +59,7 @@ class TestContentLengthSecurity(unittest.TestCase):
     def test_content_length_smaller_than_data(self):
         """
         Test: Content-Length is 10 but actual data is 30 bytes
-        Expected: Server should only read 10 bytes, remaining 20 bytes stay in buffer
+        Expected: Server rejects with 400 error (pipelining not supported)
         """
         time.sleep(0.3)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -82,14 +82,14 @@ class TestContentLengthSecurity(unittest.TestCase):
 
         time.sleep(0.2)
 
-        # Verify server parsed only first 10 bytes
-        self.assertIsNotNone(self.last_request_data)
-        self.assertEqual(self.last_request_data['data'], {'id': 123})
+        # Server should reject with 400 error due to extra data
+        self.assertIn("400", response)
+        self.assertIsNone(self.last_request_data)
 
     def test_content_length_with_pipelined_request(self):
         """
         Test: POST with exact Content-Length followed by another request in same packet
-        Expected: First request gets exact data, second request processed separately
+        Expected: Server rejects with 400 error (pipelining not supported)
         """
         initial_count = self.request_count
 
@@ -106,7 +106,7 @@ class TestContentLengthSecurity(unittest.TestCase):
             b"Connection: keep-alive\r\n"
             b"\r\n"
             b'{"test":true}'  # Exactly 13 bytes
-            b"GET /smuggled HTTP/1.1\r\n"  # This should NOT be part of POST data
+            b"GET /smuggled HTTP/1.1\r\n"  # This is pipelining attempt
             b"Host: localhost\r\n"
             b"Connection: close\r\n"
             b"\r\n"
@@ -114,16 +114,15 @@ class TestContentLengthSecurity(unittest.TestCase):
 
         sock.sendall(request)
 
-        # Read response - pipelining is not supported, only first request processed
+        # Read response - server should reject with 400 (pipelining not supported)
         response1 = sock.recv(4096).decode()
 
         sock.close()
         time.sleep(0.3)
 
-        # Verify only first request processed (pipelining not supported)
-        self.assertEqual(self.request_count - initial_count, 1)
-        # Verify pipelined data was NOT included in POST body
-        self.assertIn("200", response1)
+        # Server should reject with 400 error, no request processed
+        self.assertEqual(self.request_count - initial_count, 0)
+        self.assertIn("400", response1)
 
     def test_invalid_content_length(self):
         """

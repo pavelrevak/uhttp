@@ -92,8 +92,8 @@ class TestPipeliningNotSupported(unittest.TestCase):
         # Second request should NOT be in response
         self.assertNotIn(b"/test2", all_data)
 
-    def test_pipelining_post_only_first_processed(self):
-        """Test pipelining with POST - only first request processed"""
+    def test_pipelining_post_rejected_with_error(self):
+        """Test pipelining with POST - rejected with 400 error"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(('localhost', self.PORT))
 
@@ -129,11 +129,9 @@ class TestPipeliningNotSupported(unittest.TestCase):
         sock.close()
         time.sleep(0.2)
 
-        # Only first request (POST) should be processed
-        self.assertEqual(self.request_count, 1)
-        self.assertIn(b"/api", all_data)
-        # Second request should NOT be processed
-        self.assertNotIn(b"/status", all_data)
+        # Pipelining rejected with 400 error, no request processed
+        self.assertEqual(self.request_count, 0)
+        self.assertIn(b"400", all_data)
 
 
 if __name__ == '__main__':
