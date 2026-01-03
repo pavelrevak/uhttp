@@ -239,16 +239,6 @@ class HttpConnection():
         self._server = server
         self._addr = addr
         self._socket = sock
-        # Set appropriate I/O methods based on socket type
-        # In MicroPython, both regular and SSL sockets have recv/send methods
-        # In CPython, SSL sockets use read/write instead
-        # Prefer recv/send if available (MicroPython), fall back to read/write (CPython SSL)
-        if hasattr(sock, 'recv'):
-            self._socket_recv = sock.recv
-            self._socket_send = sock.send
-        else:
-            self._socket_recv = sock.read
-            self._socket_send = sock.write
         self._buffer = bytearray()
         self._send_buffer = bytearray()
         self._rx_bytes_counter = 0
@@ -433,7 +423,7 @@ class HttpConnection():
 
     def _recv_to_buffer(self, size):
         try:
-            buffer = self._socket_recv(size - len(self._buffer))
+            buffer = self._socket.recv(size - len(self._buffer))
         except OSError as err:
             if err.errno == errno.EAGAIN:
                 return  # Not an error, just no data yet
@@ -561,7 +551,7 @@ class HttpConnection():
             self._finalize_sent_response()
             return
         try:
-            sent = self._socket_send(self._send_buffer)
+            sent = self._socket.send(self._send_buffer)
             # MicroPython SSL may return None instead of bytes sent when buffer full
             if sent is None:
                 return
@@ -687,8 +677,11 @@ class HttpConnection():
                 self._requests_count += 1
             return self.is_loaded
         except HttpErrorWithResponse as err:
-            self.respond(data=str(err), status=err.status,
-                         headers={CONNECTION: CONNECTION_CLOSE})
+            self.respond(
+                data=str(err), status=err.status,
+                headers={CONNECTION: CONNECTION_CLOSE})
+        except ClientError:
+            self.close()
         return None
 
     def _build_response_header(self, status=200, headers=None, cookies=None):
@@ -985,12 +978,9 @@ class HttpServer():
         else:
             for connection in list(self._waiting_connections):
                 if connection.socket in sockets:
-                    try:
-                        if connection.process_request():
-                            result = connection
-                            break
-                    except ClientError:
-                        connection.close()
+                    if connection.process_request():
+                        result = connection
+                        break
 
         # Cleanup at the end - after processing active connections
         # This ensures recently active connections are not timed out
