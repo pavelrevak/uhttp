@@ -845,13 +845,14 @@ class HttpConnection():
             return False
         if not boundary:
             boundary = BOUNDARY
-        header = f'--{boundary}\r\n'
         if headers is None:
             headers = {}
         data = encode_response_data(headers, data)
+        parts = [f'--{boundary}']
         for key, val in headers.items():
-            header += f'{key}: {val}\r\n'
-        header += '\r\n'
+            parts.append(f'{key}: {val}')
+        parts.append('\r\n')
+        header = '\r\n'.join(parts)
         try:
             self._send(header)
             self._send(data)
