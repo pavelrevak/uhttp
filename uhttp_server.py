@@ -127,19 +127,22 @@ class HttpErrorWithResponse(HttpError):
 
 def decode_percent_encoding(data):
     """Decode percent encoded data (bytes)"""
+    if b'%' not in data:
+        return data.replace(b'+', b' ')
     res = bytearray()
-    while data:
-        if b'%' in data:
-            pos = data.index(b'%')
-            if pos > len(data) - 3:
-                break
-            res.extend(data[:pos].replace(b'+', b' '))
-            code = bytes(data[pos + 1:pos + 3])
-            res.append(int(code, 16))
-            data = data[pos + 3:]
-        else:
-            break
-    res.extend(data.replace(b'+', b' '))
+    i = 0
+    n = len(data)
+    while i < n:
+        b = data[i]
+        if b == 37 and i + 2 < n:  # '%'
+            try:
+                res.append(int(data[i+1:i+3], 16))
+                i += 3
+                continue
+            except ValueError:
+                pass
+        res.append(32 if b == 43 else b)  # '+' -> ' '
+        i += 1
     return bytes(res)
 
 
