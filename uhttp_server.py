@@ -391,7 +391,7 @@ class HttpConnection():
     def is_loaded(self):
         """True when request is fully loaded and ready for response"""
         if self._response_started:
-            return False  # Response already in progress
+            return False
         return self._method and (not self.content_length or self._data)
 
     @property
@@ -441,7 +441,7 @@ class HttpConnection():
             buffer = self._socket.recv(size - len(self._buffer))
         except OSError as err:
             if err.errno == errno.EAGAIN:
-                return  # Not an error, just no data yet
+                return
             raise HttpDisconnected(f"{err}: {self.addr}") from err
         except MemoryError as err:
             raise HttpErrorWithResponse(413) from err
@@ -472,11 +472,9 @@ class HttpConnection():
         if len(self._buffer) < self.content_length:
             return
 
-        # Reject pipelining - extra data beyond content_length
         if len(self._buffer) > self.content_length:
             raise HttpErrorWithResponse(400, "Unexpected data after body")
 
-        # Buffer has exactly content_length bytes - use directly
         content_type_parts = parse_header_parameters(self.content_type)
         if CONTENT_TYPE_XFORMDATA in content_type_parts:
             self._data = parse_query(self._buffer)
@@ -607,21 +605,16 @@ class HttpConnection():
         Returns:
             bool: True if connection should be kept alive
         """
-        # Check if response explicitly sets Connection header
         if response_headers and CONNECTION in response_headers:
             return response_headers[CONNECTION].lower() == CONNECTION_KEEP_ALIVE
 
-        # Auto-detect from request Connection header
         req_connection = self.headers_get_attribute(CONNECTION, '').lower()
 
-        # HTTP/1.1 default: keep-alive, HTTP/1.0 requires explicit header
         if self._protocol == 'HTTP/1.1':
             keep_alive = req_connection != CONNECTION_CLOSE
         else:
             keep_alive = req_connection == CONNECTION_KEEP_ALIVE
 
-        # Disable keep-alive if max requests limit reached
-        # Note: timeout is checked separately in _cleanup_idle_connections()
         if keep_alive and self.is_max_requests_reached:
             keep_alive = False
 
@@ -629,11 +622,9 @@ class HttpConnection():
 
     def _finalize_sent_response(self):
         """Finalize connection after response fully sent (no buffered data)"""
-        # Only finalize if response was started
         if not self._response_started:
             return
 
-        # Don't close active multipart streams
         if self._is_multipart:
             return
 
@@ -667,7 +658,6 @@ class HttpConnection():
             try:
                 self._socket.close()
             except OSError:
-                # Socket already closed or error during close
                 pass
             self._socket = None
             self._send_buffer[:] = b''
@@ -753,19 +743,14 @@ class HttpConnection():
 
         header = self._build_response_header(status, headers=headers, cookies=cookies)
         try:
-            # Send header and body together to avoid TCP packet splitting
-            # This ensures pipelined responses arrive atomically
             if data:
-                # Convert header to bytes and concatenate with data
                 header_bytes = header.encode('ascii') if isinstance(header, str) else header
                 self._send(header_bytes + data)
             else:
                 self._send(header)
-            # Close only if all data was sent, otherwise wait for write events
             if not self.has_data_to_send:
                 self._finalize_sent_response()
         except OSError:
-            # ignore this error, client has been disconnected during sending
             self.close()
 
     def respond_file(self, file_name, headers=None):
@@ -904,7 +889,6 @@ class HttpServer():
         try:
             self._socket.close()
         except OSError:
-            # Socket already closed or error during close
             pass
         self._socket = None
 
@@ -915,7 +899,6 @@ class HttpServer():
     def _cleanup_idle_connections(self):
         """Remove timed out idle connections"""
         for connection in list(self._waiting_connections):
-            # Only timeout connections that are waiting for new request (not loaded)
             if not connection.is_loaded and connection.is_timed_out:
                 connection.respond(
                     'Request Timeout', status=408,
@@ -925,34 +908,28 @@ class HttpServer():
         try:
             cl_socket, addr = self._socket.accept()
         except OSError:
-            # Socket error during accept (e.g., connection reset)
             return
 
-        # Disable Nagle's algorithm for better pipelining performance
         try:
             cl_socket.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
         except (OSError, AttributeError):
-            pass  # Ignore if not supported
+            pass
 
-        # Wrap socket with SSL if ssl_context is configured
         if self._ssl_context:
             try:
                 cl_socket = self._ssl_context.wrap_socket(
                     cl_socket, server_side=True)
-                # cl_socket.setblocking(False)
             except OSError:
-                # SSL handshake failed
                 try:
                     cl_socket.close()
                 except OSError:
                     pass
                 return
 
-        # Set socket to non-blocking mode for async I/O
         try:
             cl_socket.setblocking(False)
         except (OSError, AttributeError):
-            pass  # Ignore if not supported
+            pass
 
         connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
@@ -976,8 +953,6 @@ class HttpServer():
                         result = connection
                         break
 
-        # Cleanup at the end - after processing active connections
-        # This ensures recently active connections are not timed out
         self._cleanup_idle_connections()
 
         return result
