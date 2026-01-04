@@ -315,7 +315,7 @@ class HttpConnection():
     @property
     def is_secure(self):
         """Return True if connection is using SSL/TLS"""
-        return bool(self._server._ssl_context)
+        return self._server.is_secure
 
     @property
     def method(self):
@@ -504,7 +504,8 @@ class HttpConnection():
 
         # RFC 2616: HTTP/1.1 requires Host header
         if self._protocol == 'HTTP/1.1' and 'host' not in self._headers:
-            raise HttpErrorWithResponse(400, "Host header is required for HTTP/1.1")
+            raise HttpErrorWithResponse(
+                400, "Host header is required for HTTP/1.1")
 
         if self.content_length:
             if self.content_length > self._max_content_length:
@@ -522,7 +523,8 @@ class HttpConnection():
                 return
         if len(self._buffer) >= self._max_headers_length:
             raise HttpErrorWithResponse(
-                431, f"({len(self._buffer)} > {self._max_headers_length} Bytes)")
+                431,
+                f"({len(self._buffer)} > {self._max_headers_length} Bytes)")
 
     def _send(self, data):
         """Add data to send buffer for async sending"""
@@ -533,53 +535,63 @@ class HttpConnection():
         self._send_buffer.extend(data)
         self.try_send()
 
+    def _close_file_handle(self):
+        """Close file handle safely"""
+        if self._file_handle:
+            try:
+                self._file_handle.close()
+            except OSError:
+                pass
+            self._file_handle = None
+
+    def _refill_from_file(self):
+        """Read next chunk from file into send buffer.
+        Returns False if error occurred and connection was closed."""
+        if not self._file_handle:
+            return True
+        if len(self._send_buffer) >= self._file_chunk_size:
+            return True
+        try:
+            chunk = self._file_handle.read(self._file_chunk_size)
+            if chunk:
+                self._send_buffer.extend(chunk)
+            else:
+                self._close_file_handle()
+        except OSError:
+            self._close_file_handle()
+            self.close()
+            return False
+        return True
+
+    def _flush_send_buffer(self):
+        """Try to send data from buffer.
+        Returns True if buffer is empty."""
+        if not self._send_buffer:
+            return True
+        try:
+            sent = self._socket.send(self._send_buffer)
+            # MicroPython SSL may return None when buffer full
+            if sent is None:
+                return False
+            if sent > 0:
+                self._send_buffer = self._send_buffer[sent:]
+            return len(self._send_buffer) == 0
+        except OSError as err:
+            if err.errno == errno.EAGAIN:
+                return False
+            self.close()
+            return False
+
     def try_send(self):
-        """Try to send data from send buffer, finalize when complete"""
+        """Try to send data, finalize when complete"""
         if self._socket is None:
             return
 
-        # If streaming file, read next chunk when buffer is low
-        if self._file_handle and len(self._send_buffer) < self._file_chunk_size:
-            try:
-                chunk = self._file_handle.read(self._file_chunk_size)
-                if chunk:
-                    self._send_buffer.extend(chunk)
-                else:
-                    # File fully read, close handle
-                    try:
-                        self._file_handle.close()
-                    except OSError:
-                        pass
-                    self._file_handle = None
-            except OSError:
-                # Error reading file, close handle and connection
-                if self._file_handle:
-                    try:
-                        self._file_handle.close()
-                    except OSError:
-                        pass
-                    self._file_handle = None
-                self.close()
-                return
-
-        if not self._send_buffer:
-            self._finalize_sent_response()
+        if not self._refill_from_file():
             return
-        try:
-            sent = self._socket.send(self._send_buffer)
-            # MicroPython SSL may return None instead of bytes sent when buffer full
-            if sent is None:
-                return
-            if sent > 0:
-                self._send_buffer = self._send_buffer[sent:]
-            if len(self._send_buffer) == 0 and self._file_handle is None:
-                self._finalize_sent_response()
-        except OSError as err:
-            # EAGAIN/EWOULDBLOCK means socket buffer is full (non-blocking)
-            if err.errno == errno.EAGAIN:
-                return
-            # Other errors are real connection problems
-            self.close()
+
+        if self._flush_send_buffer() and self._file_handle is None:
+            self._finalize_sent_response()
 
     def update_activity(self):
         """Update last activity timestamp"""
@@ -589,7 +601,8 @@ class HttpConnection():
         """Determine if connection should be kept alive
 
         Args:
-            response_headers: Optional dict of response headers to check for explicit Connection header
+            response_headers: Optional dict of response headers
+                    to check for explicit Connection header
 
         Returns:
             bool: True if connection should be kept alive
@@ -631,13 +644,7 @@ class HttpConnection():
 
     def reset(self):
         """Reset connection for next request (keep-alive)"""
-        # Close file handle if streaming
-        if self._file_handle:
-            try:
-                self._file_handle.close()
-            except OSError:
-                pass
-            self._file_handle = None
+        self._close_file_handle()
         self._method = None
         self._url = None
         self._protocol = None
@@ -654,13 +661,7 @@ class HttpConnection():
 
     def close(self):
         """Close connection"""
-        # Close file handle if streaming
-        if self._file_handle:
-            try:
-                self._file_handle.close()
-            except OSError:
-                pass
-            self._file_handle = None
+        self._close_file_handle()
         self._server.remove_connection(self)
         if self._socket:
             try:
@@ -687,7 +688,6 @@ class HttpConnection():
             elif self.content_length:
                 self._recv_to_buffer(self.content_length)
                 self._process_data()
-            # TODO check for stream data without content-length
             if self.is_loaded:
                 self._requests_count += 1
             return self.is_loaded
@@ -713,7 +713,6 @@ class HttpConnection():
 
         if cookies:
             for key, val in cookies.items():
-                # TODO make support for attributes
                 if val is None:
                     val = '; Max-Age=0'
                 parts.append(f'{SET_COOKIE}: {key}={val}')
@@ -804,17 +803,9 @@ class HttpConnection():
         try:
             # Open file BEFORE sending headers (so try_send knows streaming is active)
             self._file_handle = open(file_name, 'rb')
-
-            # Send headers
             self._send(header)
         except OSError:
-            # Error opening file or sending headers
-            if self._file_handle:
-                try:
-                    self._file_handle.close()
-                except OSError:
-                    pass
-                self._file_handle = None
+            self._close_file_handle()
             self.close()
 
     def response_multipart(self, headers=None):
@@ -907,6 +898,11 @@ class HttpServer():
     def socket(self):
         """Server socket"""
         return self._socket
+
+    @property
+    def is_secure(self):
+        """Return True if server uses SSL/TLS"""
+        return bool(self._ssl_context)
 
     @property
     def read_sockets(self):
