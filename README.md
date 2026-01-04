@@ -15,7 +15,7 @@
 
 ## Testing
 
-Comprehensive test suite with 105 tests covering all major functionality.
+Comprehensive test suite with 130 tests covering all major functionality.
 
 Run all tests from the project root:
 
@@ -179,9 +179,6 @@ http_server = uhttp_server.HttpServer(port=80)
 https_server = uhttp_server.HttpServer(port=443, ssl_context=context)
 
 while True:
-    # Flush pending SSL data before select (only needed for HTTPS)
-    https_server.flush_pending_sends()
-
     r, w, _ = select.select(
         http_server.read_sockets + https_server.read_sockets,
         http_server.write_sockets + https_server.write_sockets,
@@ -281,24 +278,32 @@ Parameters:
 
 - All sockets with data to send, used for select
 
+**`is_secure(self)`**
+
+- Returns `True` if server uses SSL/TLS, `False` otherwise
+
 #### Methods:
 
-**`flush_pending_sends(self)`**
+**`event_write(self, sockets)`**
 
-- Try to flush any pending buffered data. Important for SSL connections where data may be buffered in the SSL layer. Call this before select() when using external select loop.
+- Send buffered data for sockets in list. Called internally by `process_events()`.
+
+**`event_read(self, sockets)`**
+
+- Process sockets with read event, returns None or instance of HttpConnection with established connection.
 
 **`process_events(self, read_sockets, write_sockets)`**
 
-- Process select results, returns None or instance of HttpClient with established connection
+- Process select results, returns None or instance of HttpConnection with established connection.
 
 **`wait(self, timeout=1)`**
 
-- Wait for new clients with specified timeout, returns None or instance of HttpClient with established connection. Calls flush_pending_sends() automatically.
+- Wait for new clients with specified timeout, returns None or instance of HttpConnection with established connection.
 
 
-### Class `HttpClient`:
+### Class `HttpConnection`:
 
-**`HttpClient(sock, addr)`**
+**`HttpConnection(server, sock, addr, **kwargs)`**
 
 #### Properties:
 
@@ -354,9 +359,9 @@ Parameters:
 
 - This socket
 
-**`is_loaded_all(self)`**
+**`is_loaded(self)`**
 
-- State if request is fully loaded
+- Returns `True` when request is fully loaded and ready for response
 
 **`content_length(self)`**
 
@@ -379,3 +384,31 @@ Parameters:
 **`respond_redirect(self, url, status=302, cookies=None)`**
 
 - Create redirect response to URL
+
+**`respond_file(self, file_name, headers=None)`**
+
+- Respond with file content, streaming asynchronously to minimize memory usage
+
+**`response_multipart(self, headers=None)`**
+
+- Create multipart response with headers as dict (for MJPEG streams etc.)
+
+**`response_multipart_frame(self, data, headers=None, boundary=None)`**
+
+- Send multipart frame with data and headers
+
+**`response_multipart_end(self, boundary=None)`**
+
+- Finish multipart stream
+
+
+## TODO
+
+- Cookie attributes support (Path, Domain, Secure, HttpOnly, SameSite, Expires)
+- Expect: 100-continue support - currently causes deadlock (client waits for 100, server waits for body)
+- Streaming API for large data (receiving and sending):
+  - Separate HttpConnection (HTTP protocol) from DataStream (data transfer)
+  - wait() returns after headers, body is read via read()/read_all()
+  - Chunked transfer encoding support (receiving and sending)
+  - API options: events, callbacks, or extended HttpConnection object
+  - Handle EAGAIN when sending large responses

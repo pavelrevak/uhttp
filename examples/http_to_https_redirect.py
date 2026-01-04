@@ -56,35 +56,24 @@ def main():
             # Wait for socket events
             read, write, _ = select.select(read_sockets, write_sockets, [], 1.0)
 
-            # Process write events
-            if write:
-                http_server.event_write(write)
-                https_server.event_write(write)
+            # Handle HTTP requests - redirect to HTTPS
+            http_client = http_server.process_events(read, write)
+            if http_client:
+                host = http_client.host.replace(':8080', ':8443')
+                https_url = f"https://{host}{http_client.url}"
+                print(f"HTTP: {http_client.method} {http_client.path} → {https_url}")
+                http_client.respond_redirect(https_url)
 
-            # Process read events
-            if read:
-                # Handle HTTP requests - redirect to HTTPS
-                http_client = http_server.event_read(read)
-                if http_client:
-                    # Replace HTTP port with HTTPS port in Host header
-                    host = http_client.host.replace(':8080', ':8443')
-                    https_url = f"https://{host}{http_client.url}"
-
-                    print(f"HTTP: {http_client.method} {http_client.path} → {https_url}")
-                    http_client.respond_redirect(https_url)
-
-                # Handle HTTPS requests - serve content
-                https_client = https_server.event_read(read)
-                if https_client:
-                    print(f"HTTPS: {https_client.method} {https_client.path}")
-
-                    # Serve actual content
-                    https_client.respond({
-                        'message': 'Hello from HTTPS!',
-                        'secure': https_client.is_secure,
-                        'path': https_client.path,
-                        'method': https_client.method
-                    })
+            # Handle HTTPS requests - serve content
+            https_client = https_server.process_events(read, write)
+            if https_client:
+                print(f"HTTPS: {https_client.method} {https_client.path}")
+                https_client.respond({
+                    'message': 'Hello from HTTPS!',
+                    'secure': https_client.is_secure,
+                    'path': https_client.path,
+                    'method': https_client.method
+                })
 
     except KeyboardInterrupt:
         print("\nShutting down...")
