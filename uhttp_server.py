@@ -720,6 +720,25 @@ class HttpConnection():
         parts.append('\r\n')
         return '\r\n'.join(parts)
 
+    def _prepare_response(self, headers=None, is_multipart=False):
+        """Common response preparation, returns headers dict"""
+        if self._response_started:
+            raise HttpError("Response already sent for this request")
+        self._response_started = True
+        self._is_multipart = is_multipart
+
+        if headers is None:
+            headers = {}
+
+        if not is_multipart:
+            keep_alive = self._should_keep_alive(headers)
+            if CONNECTION not in headers:
+                headers[CONNECTION] = (
+                    CONNECTION_KEEP_ALIVE if keep_alive else CONNECTION_CLOSE)
+            self._response_keep_alive = keep_alive
+
+        return headers
+
     def respond(self, data=None, status=200, headers=None, cookies=None):
         """Create general respond with data, status and headers as dict
 
@@ -728,24 +747,9 @@ class HttpConnection():
         """
         if self._socket is None:
             return
-        if self._response_started:
-            raise HttpError("Response already sent for this request")
-        self._response_started = True
-        self._is_multipart = False
-
-        if headers is None:
-            headers = {}
+        headers = self._prepare_response(headers)
         if data:
             data = encode_response_data(headers, data)
-
-        # Determine keep-alive behavior and add Connection header if not set
-        keep_alive = self._should_keep_alive(headers)
-        if CONNECTION not in headers:
-            headers[CONNECTION] = (
-                CONNECTION_KEEP_ALIVE if keep_alive else CONNECTION_CLOSE)
-
-        # Store keep-alive decision for event_write
-        self._response_keep_alive = keep_alive
 
         header = self._build_response_header(status, headers=headers, cookies=cookies)
         try:
@@ -769,39 +773,22 @@ class HttpConnection():
 
         To force connection close, set headers['connection'] = 'close'.
         """
-        if self._response_started:
-            raise HttpError("Response already sent for this request")
-        if headers is None:
-            headers = {}
-
         try:
             file_size = _os.stat(file_name)[6]  # st_size
         except (OSError, ImportError, AttributeError):
             self.respond(data=f'File not found: {file_name}', status=404)
             return
 
+        headers = self._prepare_response(headers)
+
         if CONTENT_TYPE not in headers:
             ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
             headers[CONTENT_TYPE] = CONTENT_TYPE_MAP.get(ext, CONTENT_TYPE_OCTET_STREAM)
-
-        # Build headers
         headers[CONTENT_LENGTH] = file_size
-
-        # Determine keep-alive behavior and add Connection header if not set
-        keep_alive = self._should_keep_alive(headers)
-        if CONNECTION not in headers:
-            headers[CONNECTION] = (
-                CONNECTION_KEEP_ALIVE if keep_alive else CONNECTION_CLOSE)
-
-        # Prepare response
-        self._response_keep_alive = keep_alive
-        self._response_started = True
-        self._is_multipart = False
 
         header = self._build_response_header(200, headers=headers)
 
         try:
-            # Open file BEFORE sending headers (so try_send knows streaming is active)
             self._file_handle = open(file_name, 'rb')
             self._send(header)
         except OSError:
@@ -812,13 +799,8 @@ class HttpConnection():
         """Create multipart respond with headers as dict"""
         if self._socket is None:
             return False
-        if self._response_started:
-            raise HttpError("Response already sent for this request")
-        self._response_started = True
-        self._is_multipart = True
+        headers = self._prepare_response(headers, is_multipart=True)
 
-        if headers is None:
-            headers = {}
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_MULTIPART_REPLACE
 
