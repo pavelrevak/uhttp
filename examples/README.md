@@ -2,7 +2,66 @@
 
 Example scripts demonstrating various features of the uHTTP library.
 
-## SSL/HTTPS Examples
+Run examples from the project root directory:
+```bash
+PYTHONPATH=. python examples/<example>.py
+```
+
+## HTTP Client Examples
+
+### Basic Client Usage
+
+**File:** `client_basic.py`
+
+Demonstrates basic HTTP client features:
+- Simple GET requests
+- JSON API (GET, POST, PUT, DELETE)
+- Keep-alive connections
+- Context manager
+- Custom headers
+- Binary data
+
+```bash
+PYTHONPATH=. python examples/client_basic.py
+```
+
+### HTTPS Client
+
+**File:** `client_https.py`
+
+HTTPS client with SSL/TLS support.
+
+```bash
+PYTHONPATH=. python examples/client_https.py
+```
+
+### Async/Non-blocking Client
+
+**File:** `client_async.py`
+
+Non-blocking HTTP client using select():
+- Single async request
+- Parallel requests (multiple clients)
+- Mixed operations (GET, POST, PUT, DELETE)
+- Timeout handling
+
+```bash
+PYTHONPATH=. python examples/client_async.py
+```
+
+### Client + Server Integration
+
+**File:** `client_with_server.py`
+
+Combining HttpServer and HttpClient:
+- API aggregator (parallel requests to multiple backends)
+- Simple proxy (uncomment in code to run)
+
+```bash
+PYTHONPATH=. python examples/client_with_server.py
+```
+
+## SSL/HTTPS Server Examples
 
 ### Prerequisites
 
@@ -19,7 +78,7 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -node
 Basic HTTPS server with SSL support.
 
 ```bash
-python examples/https_server.py
+PYTHONPATH=. python examples/https_server.py
 ```
 
 Test with:
@@ -37,7 +96,7 @@ Runs two servers:
 - HTTPS server (port 8443) - serves actual content
 
 ```bash
-python examples/http_to_https_redirect.py
+PYTHONPATH=. python examples/http_to_https_redirect.py
 ```
 
 Test with:

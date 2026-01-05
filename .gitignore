@@ -4,4 +4,4 @@ __pycache__
 .venv*
 *.pem
 *.md
-.claude
+!README*.md
