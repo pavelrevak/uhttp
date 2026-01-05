@@ -149,22 +149,46 @@ def _encode_request_data(data, headers):
 def _parse_www_authenticate(header_value):
     """Parse WWW-Authenticate header into dict"""
     result = {}
-    # Remove 'Digest ' prefix
+    # Remove 'Digest ' or 'Basic ' prefix
     if header_value.lower().startswith('digest '):
         header_value = header_value[7:]
     elif header_value.lower().startswith('basic '):
         header_value = header_value[6:]
 
-    # Parse key="value" or key=value pairs
-    for part in header_value.split(','):
-        part = part.strip()
-        if '=' in part:
-            key, val = part.split('=', 1)
-            key = key.strip().lower()
-            val = val.strip()
-            if val.startswith('"') and val.endswith('"'):
-                val = val[1:-1]
-            result[key] = val
+    # Parse key="value" or key=value pairs (handles commas in quoted values)
+    i = 0
+    while i < len(header_value):
+        # Skip whitespace and commas
+        while i < len(header_value) and header_value[i] in ' ,':
+            i += 1
+        if i >= len(header_value):
+            break
+
+        # Find key
+        eq_pos = header_value.find('=', i)
+        if eq_pos == -1:
+            break
+        key = header_value[i:eq_pos].strip().lower()
+        i = eq_pos + 1
+
+        # Parse value
+        if i < len(header_value) and header_value[i] == '"':
+            # Quoted value - find closing quote
+            i += 1
+            end = header_value.find('"', i)
+            if end == -1:
+                end = len(header_value)
+            val = header_value[i:end]
+            i = end + 1
+        else:
+            # Unquoted value - find comma or end
+            end = header_value.find(',', i)
+            if end == -1:
+                end = len(header_value)
+            val = header_value[i:end].strip()
+            i = end
+
+        result[key] = val
     return result
 
 
@@ -521,14 +545,13 @@ class HttpClient:
 
         return response
 
-    def _parse_cookies(self):
-        for key, val in self._response_headers.items():
-            if key == SET_COOKIE:
-                # Simple parsing - just key=value before first ;
-                if '=' in val:
-                    cookie_part = val.split(';')[0]
-                    name, value = cookie_part.split('=', 1)
-                    self._cookies[name.strip()] = value.strip()
+    def _parse_set_cookie(self, val):
+        """Parse single Set-Cookie header value"""
+        # Simple parsing - just key=value before first ;
+        if '=' in val:
+            cookie_part = val.split(';')[0]
+            name, value = cookie_part.split('=', 1)
+            self._cookies[name.strip()] = value.strip()
 
     def _parse_headers(self, header_lines):
         self._response_headers = {}
@@ -541,12 +564,15 @@ class HttpClient:
                 self._parse_status_line(line)
             else:
                 key, val = _parse_header_line(line)
-                self._response_headers[key] = val
+                # Handle Set-Cookie specially - parse each one immediately
+                # (dict would overwrite multiple Set-Cookie headers)
+                if key == SET_COOKIE:
+                    self._parse_set_cookie(val)
+                else:
+                    self._response_headers[key] = val
 
         cl = self._response_headers.get(CONTENT_LENGTH)
         self._response_content_length = int(cl) if cl else 0
-
-        self._parse_cookies()
 
     def _parse_status_line(self, line):
         try:
