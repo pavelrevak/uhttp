@@ -490,6 +490,7 @@ class HttpClient:
         if self._socket is not None:
             return
 
+        sock = None
         try:
             addr_info = _socket.getaddrinfo(
                 self._host, self._port, 0, _socket.SOCK_STREAM)
@@ -509,6 +510,11 @@ class HttpClient:
             sock.setblocking(False)
             self._socket = sock
         except OSError as err:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
             raise HttpConnectionError(f"Connect failed: {err}") from err
 
     def _finalize_response(self):
@@ -787,11 +793,13 @@ class HttpClient:
                     if self._state == STATE_SENDING:
                         _, w, _ = _select.select([], [self._socket], [], timeout)
                         if not w:
+                            self._close()
                             return None
                         self._try_send()
                     else:
                         r, _, _ = _select.select([self._socket], [], [], timeout)
                         if not r:
+                            self._close()
                             return None
                         if self._state == STATE_RECEIVING_HEADERS:
                             self._process_recv_headers()
