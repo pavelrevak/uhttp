@@ -7,6 +7,7 @@ import errno
 import socket as _socket
 import select as _select
 import json as _json
+import ssl as _ssl
 
 KB = 2 ** 10
 MB = 2 ** 20
@@ -65,6 +66,36 @@ def _parse_header_line(line):
         raise HttpResponseError(f"Wrong header format: {line}")
     key, val = line.split(':', 1)
     return key.strip().lower(), val.strip()
+
+
+def parse_url(url):
+    """Parse URL to host, port, path, ssl
+
+    Returns (host, port, path, ssl) tuple.
+    Path includes leading slash, can be used as base_path.
+    """
+    ssl = False
+    if url.startswith('https://'):
+        ssl = True
+        url = url[8:]
+    elif url.startswith('http://'):
+        url = url[7:]
+
+    if '/' in url:
+        host_port, path = url.split('/', 1)
+        path = '/' + path
+    else:
+        host_port = url
+        path = ''
+
+    if ':' in host_port:
+        host, port_str = host_port.rsplit(':', 1)
+        port = int(port_str)
+    else:
+        host = host_port
+        port = 443 if ssl else 80
+
+    return host, port, path, ssl
 
 
 def _encode_query(query):
@@ -148,14 +179,37 @@ class HttpResponse:
 
 
 class HttpClient:
-    """HTTP client with keep-alive support"""
+    """HTTP client with keep-alive support
+
+    Can be initialized with URL or host/port:
+        HttpClient('https://api.example.com/v1')
+        HttpClient('api.example.com', port=443, ssl_context=ctx)
+    """
 
     def __init__(
-            self, host, port=80, ssl_context=None,
+            self, url_or_host, port=None, ssl_context=None,
             connect_timeout=CONNECT_TIMEOUT, idle_timeout=IDLE_TIMEOUT,
             max_response_length=MAX_RESPONSE_LENGTH):
+        # Parse URL if provided
+        if '://' in url_or_host or url_or_host.startswith('http'):
+            host, parsed_port, base_path, use_ssl = parse_url(url_or_host)
+            if port is None:
+                port = parsed_port
+            if use_ssl and ssl_context is None:
+                if hasattr(_ssl, 'create_default_context'):
+                    ssl_context = _ssl.create_default_context()
+                else:
+                    raise HttpClientError(
+                        "HTTPS requires explicit ssl_context on MicroPython")
+        else:
+            host = url_or_host
+            base_path = ''
+            if port is None:
+                port = 443 if ssl_context else 80
+
         self._host = host
         self._port = port
+        self._base_path = base_path.rstrip('/')
         self._ssl_context = ssl_context
         self._connect_timeout = connect_timeout
         self._idle_timeout = idle_timeout
@@ -200,6 +254,10 @@ class HttpClient:
         return self._port
 
     @property
+    def base_path(self):
+        return self._base_path
+
+    @property
     def read_sockets(self):
         if self._socket and self._state in (
                 STATE_RECEIVING_HEADERS, STATE_RECEIVING_BODY):
@@ -222,6 +280,13 @@ class HttpClient:
             headers = {}
 
         encoded_data = _encode_request_data(data, headers)
+
+        # Prepend base_path
+        if self._base_path and not path.startswith(self._base_path):
+            path = self._base_path + (path if path.startswith('/') else '/' + path)
+        elif not path.startswith('/'):
+            path = '/' + path
+
         full_path = path + _encode_query(query)
 
         if HOST not in headers:

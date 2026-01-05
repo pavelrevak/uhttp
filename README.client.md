@@ -7,6 +7,8 @@
 - Select-based async (no async/await, no threading)
 - Keep-alive connections with automatic reuse
 - Fluent API: `response = client.get('/path').wait()`
+- URL parsing with automatic SSL detection
+- Base path support for API versioning
 - JSON support (auto-encode request, lazy decode response)
 - Binary data support
 - Cookies persistence
@@ -15,24 +17,44 @@
 
 ## Usage
 
-### Basic blocking request
+### URL-based initialization (recommended)
+
+```python
+from uhttp_client import HttpClient
+
+# HTTPS with automatic SSL context
+client = HttpClient('https://api.example.com')
+response = client.get('/users').wait()
+client.close()
+
+# With base path for API versioning
+client = HttpClient('https://api.example.com/v1')
+response = client.get('/users').wait()  # requests /v1/users
+client.close()
+
+# HTTP
+client = HttpClient('http://localhost:8080')
+```
+
+### Traditional initialization
 
 ```python
 from uhttp_client import HttpClient
 
 client = HttpClient('httpbin.org', port=80)
-
 response = client.get('/get').wait()
-print(response.status)      # 200
-print(response.json())      # parsed JSON
-
 client.close()
+
+# With explicit SSL context
+import ssl
+ctx = ssl.create_default_context()
+client = HttpClient('api.example.com', port=443, ssl_context=ctx)
 ```
 
 ### Context manager
 
 ```python
-with HttpClient('httpbin.org', port=80) as client:
+with HttpClient('https://httpbin.org') as client:
     response = client.get('/get').wait()
     print(response.status)
 ```
@@ -40,7 +62,7 @@ with HttpClient('httpbin.org', port=80) as client:
 ### JSON API
 
 ```python
-client = HttpClient('api.example.com', port=80)
+client = HttpClient('https://api.example.com/v1')
 
 # GET with query parameters
 response = client.get('/users', query={'page': 1, 'limit': 10}).wait()
@@ -80,13 +102,25 @@ image_bytes = response.data
 
 ## HTTPS
 
+### Automatic (with URL)
+
+```python
+from uhttp_client import HttpClient
+
+# SSL context created automatically for https:// URLs
+client = HttpClient('https://api.example.com')
+response = client.get('/secure').wait()
+client.close()
+```
+
+### Manual SSL context
+
 ```python
 import ssl
 from uhttp_client import HttpClient
 
 ctx = ssl.create_default_context()
 client = HttpClient('api.example.com', port=443, ssl_context=ctx)
-
 response = client.get('/secure').wait()
 client.close()
 ```
@@ -99,7 +133,6 @@ from uhttp_client import HttpClient
 
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 client = HttpClient('api.example.com', port=443, ssl_context=ctx)
-
 response = client.get('/secure').wait()
 client.close()
 ```
@@ -113,7 +146,7 @@ Default mode is async. Use with external select loop:
 import select
 from uhttp_client import HttpClient
 
-client = HttpClient('httpbin.org', port=80)
+client = HttpClient('http://httpbin.org')
 
 # Start request (non-blocking)
 client.get('/delay/2')
@@ -141,9 +174,9 @@ import select
 from uhttp_client import HttpClient
 
 clients = [
-    HttpClient('httpbin.org', port=80),
-    HttpClient('httpbin.org', port=80),
-    HttpClient('httpbin.org', port=80),
+    HttpClient('http://httpbin.org'),
+    HttpClient('http://httpbin.org'),
+    HttpClient('http://httpbin.org'),
 ]
 
 # Start all requests
@@ -179,7 +212,7 @@ from uhttp_server import HttpServer
 from uhttp_client import HttpClient
 
 server = HttpServer(port=8080)
-backend = HttpClient('api.example.com', port=80)
+backend = HttpClient('http://api.example.com')
 
 while True:
     r, w, _ = select.select(
@@ -202,14 +235,44 @@ while True:
 
 ## API
 
+### Function `parse_url`
+
+**`parse_url(url)`**
+
+Parse URL into components. Returns `(host, port, path, ssl)` tuple.
+
+```python
+from uhttp_client import parse_url
+
+parse_url('https://api.example.com/v1/users')
+# → ('api.example.com', 443, '/v1/users', True)
+
+parse_url('http://localhost:8080/api')
+# → ('localhost', 8080, '/api', False)
+
+parse_url('example.com')
+# → ('example.com', 80, '', False)
+```
+
+
 ### Class `HttpClient`
 
-**`HttpClient(host, port=80, ssl_context=None, connect_timeout=10, idle_timeout=30, max_response_length=1MB)`**
+**`HttpClient(url_or_host, port=None, ssl_context=None, connect_timeout=10, idle_timeout=30, max_response_length=1MB)`**
+
+Can be initialized with URL or host/port:
+
+```python
+# URL-based (recommended)
+HttpClient('https://api.example.com/v1')
+
+# Traditional
+HttpClient('api.example.com', port=443, ssl_context=ctx)
+```
 
 Parameters:
-- `host` - Server hostname
-- `port` - Server port (default: 80)
-- `ssl_context` - Optional `ssl.SSLContext` for HTTPS
+- `url_or_host` - Full URL (http://... or https://...) or hostname
+- `port` - Server port (auto-detected from URL: 80 for http, 443 for https)
+- `ssl_context` - Optional `ssl.SSLContext` (auto-created for https:// URLs)
 - `connect_timeout` - Connection timeout in seconds (default: 10)
 - `idle_timeout` - Idle/response timeout in seconds (default: 30)
 - `max_response_length` - Maximum response size (default: 1MB)
@@ -218,6 +281,7 @@ Parameters:
 
 - `host` - Server hostname
 - `port` - Server port
+- `base_path` - Base path from URL (prepended to all request paths)
 - `is_connected` - True if socket is connected
 - `state` - Current state (STATE_IDLE, STATE_SENDING, etc.)
 - `cookies` - Cookies dict (persistent across requests)
@@ -231,7 +295,7 @@ Parameters:
 Start HTTP request (async). Returns `self` for chaining.
 
 - `method` - HTTP method (GET, POST, PUT, DELETE, etc.)
-- `path` - Request path
+- `path` - Request path (base_path is prepended automatically)
 - `headers` - Optional headers dict
 - `data` - Request body (bytes, str, or dict/list for JSON)
 - `query` - Optional query parameters dict
@@ -287,7 +351,7 @@ Cookies are automatically:
 - Sent with subsequent requests
 
 ```python
-client = HttpClient('example.com', port=80)
+client = HttpClient('https://example.com')
 
 # Login - server sets session cookie
 client.post('/login', json={'user': 'admin', 'pass': 'secret'}).wait()
@@ -307,7 +371,7 @@ client.close()
 Connections are reused automatically (HTTP/1.1 keep-alive).
 
 ```python
-client = HttpClient('httpbin.org', port=80)
+client = HttpClient('https://httpbin.org')
 
 # All requests use the same connection
 for i in range(10):
@@ -329,7 +393,7 @@ from uhttp_client import (
     HttpResponseError
 )
 
-client = HttpClient('example.com', port=80)
+client = HttpClient('https://example.com')
 
 try:
     response = client.get('/api').wait()
@@ -368,3 +432,24 @@ Run examples:
 ```bash
 PYTHONPATH=. python examples/client_basic.py
 ```
+
+
+## CLI Tool
+
+Simple curl-like CLI tool using uhttp_client:
+
+```bash
+# GET request
+PYTHONPATH=. python tools/httpcl.py http://httpbin.org/get
+
+# POST with JSON
+PYTHONPATH=. python tools/httpcl.py http://httpbin.org/post -j '{"key": "value"}'
+
+# Verbose mode
+PYTHONPATH=. python tools/httpcl.py -v https://httpbin.org/get
+
+# Save to file
+PYTHONPATH=. python tools/httpcl.py https://httpbin.org/image/png -o image.png
+```
+
+See `tools/httpcl.py --help` for all options.
