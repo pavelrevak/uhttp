@@ -12,6 +12,7 @@
 - JSON support (auto-encode request, lazy decode response)
 - Binary data support
 - Cookies persistence
+- HTTP Basic and Digest authentication
 - SSL/TLS support for HTTPS
 
 
@@ -257,13 +258,16 @@ parse_url('example.com')
 
 ### Class `HttpClient`
 
-**`HttpClient(url_or_host, port=None, ssl_context=None, connect_timeout=10, idle_timeout=30, max_response_length=1MB)`**
+**`HttpClient(url_or_host, port=None, ssl_context=None, auth=None, connect_timeout=10, idle_timeout=30, max_response_length=1MB)`**
 
 Can be initialized with URL or host/port:
 
 ```python
 # URL-based (recommended)
 HttpClient('https://api.example.com/v1')
+
+# With auth in URL
+HttpClient('https://user:pass@api.example.com/v1')
 
 # Traditional
 HttpClient('api.example.com', port=443, ssl_context=ctx)
@@ -273,6 +277,7 @@ Parameters:
 - `url_or_host` - Full URL (http://... or https://...) or hostname
 - `port` - Server port (auto-detected from URL: 80 for http, 443 for https)
 - `ssl_context` - Optional `ssl.SSLContext` (auto-created for https:// URLs)
+- `auth` - Optional (username, password) tuple for HTTP authentication
 - `connect_timeout` - Connection timeout in seconds (default: 10)
 - `idle_timeout` - Idle/response timeout in seconds (default: 30)
 - `max_response_length` - Maximum response size (default: 1MB)
@@ -284,13 +289,14 @@ Parameters:
 - `base_path` - Base path from URL (prepended to all request paths)
 - `is_connected` - True if socket is connected
 - `state` - Current state (STATE_IDLE, STATE_SENDING, etc.)
+- `auth` - Authentication credentials tuple (username, password) or None
 - `cookies` - Cookies dict (persistent across requests)
 - `read_sockets` - Sockets to monitor for reading (for select)
 - `write_sockets` - Sockets to monitor for writing (for select)
 
 #### Methods
 
-**`request(method, path, headers=None, data=None, query=None, json=None)`**
+**`request(method, path, headers=None, data=None, query=None, json=None, auth=None)`**
 
 Start HTTP request (async). Returns `self` for chaining.
 
@@ -300,6 +306,7 @@ Start HTTP request (async). Returns `self` for chaining.
 - `data` - Request body (bytes, str, or dict/list for JSON)
 - `query` - Optional query parameters dict
 - `json` - Shortcut for data with JSON encoding
+- `auth` - Optional (username, password) tuple, overrides client's default auth
 
 **`get(path, **kwargs)`** - Send GET request
 
@@ -342,6 +349,50 @@ Close connection.
 **`json()`**
 
 Parse response body as JSON. Lazy evaluation, cached.
+
+
+## Authentication
+
+### Basic Auth
+
+HTTP Basic authentication via URL or `auth` parameter:
+
+```python
+# Via URL
+client = HttpClient('https://user:password@api.example.com')
+response = client.get('/protected').wait()
+
+# Via parameter
+client = HttpClient('https://api.example.com', auth=('user', 'password'))
+response = client.get('/protected').wait()
+
+# Change auth at runtime
+client.auth = ('new_user', 'new_password')
+
+# Per-request auth (overrides client's default)
+client = HttpClient('https://api.example.com')
+response = client.get('/admin', auth=('admin', 'secret')).wait()
+response = client.get('/public').wait()  # no auth
+```
+
+### Digest Auth
+
+HTTP Digest authentication is handled automatically. On 401 response with
+`WWW-Authenticate: Digest` header, the client retries with digest credentials:
+
+```python
+# Same API as Basic auth - digest is automatic
+client = HttpClient('https://api.example.com', auth=('user', 'password'))
+
+# First request gets 401, client automatically retries with digest auth
+response = client.get('/protected').wait()
+print(response.status)  # 200 (after automatic retry)
+```
+
+Supported digest features:
+- MD5 and MD5-sess algorithms
+- qop (quality of protection) with auth mode
+- Nonce counting for multiple requests
 
 
 ## Cookies

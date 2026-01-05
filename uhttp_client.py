@@ -8,6 +8,8 @@ import socket as _socket
 import select as _select
 import json as _json
 import ssl as _ssl
+import binascii as _binascii
+import hashlib as _hashlib
 
 KB = 2 ** 10
 MB = 2 ** 20
@@ -32,6 +34,8 @@ HOST = 'host'
 USER_AGENT = 'user-agent'
 USER_AGENT_VALUE = 'uhttp-client/1.0'
 TRANSFER_ENCODING = 'transfer-encoding'
+AUTHORIZATION = 'authorization'
+WWW_AUTHENTICATE = 'www-authenticate'
 
 STATE_IDLE = 0
 STATE_CONNECTING = 1
@@ -69,10 +73,11 @@ def _parse_header_line(line):
 
 
 def parse_url(url):
-    """Parse URL to host, port, path, ssl
+    """Parse URL to host, port, path, ssl, auth
 
-    Returns (host, port, path, ssl) tuple.
+    Returns (host, port, path, ssl, auth) tuple.
     Path includes leading slash, can be used as base_path.
+    Auth is (user, password) tuple or None.
     """
     ssl = False
     if url.startswith('https://'):
@@ -81,12 +86,23 @@ def parse_url(url):
     elif url.startswith('http://'):
         url = url[7:]
 
+    # Split host_port and path first
     if '/' in url:
         host_port, path = url.split('/', 1)
         path = '/' + path
     else:
         host_port = url
         path = ''
+
+    # Extract auth (user:pass@) only from host_port part
+    auth = None
+    if '@' in host_port:
+        auth_part, host_port = host_port.rsplit('@', 1)
+        if ':' in auth_part:
+            user, password = auth_part.split(':', 1)
+            auth = (user, password)
+        else:
+            auth = (auth_part, '')
 
     if ':' in host_port:
         host, port_str = host_port.rsplit(':', 1)
@@ -95,7 +111,7 @@ def parse_url(url):
         host = host_port
         port = 443 if ssl else 80
 
-    return host, port, path, ssl
+    return host, port, path, ssl, auth
 
 
 def _encode_query(query):
@@ -128,6 +144,90 @@ def _encode_request_data(data, headers):
     else:
         raise HttpClientError(f"Unsupported data type: {type(data)}")
     return bytes(data)
+
+
+def _parse_www_authenticate(header_value):
+    """Parse WWW-Authenticate header into dict"""
+    result = {}
+    # Remove 'Digest ' prefix
+    if header_value.lower().startswith('digest '):
+        header_value = header_value[7:]
+    elif header_value.lower().startswith('basic '):
+        header_value = header_value[6:]
+
+    # Parse key="value" or key=value pairs
+    for part in header_value.split(','):
+        part = part.strip()
+        if '=' in part:
+            key, val = part.split('=', 1)
+            key = key.strip().lower()
+            val = val.strip()
+            if val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
+            result[key] = val
+    return result
+
+
+def _md5_hex(data):
+    """Calculate MD5 hash and return hex string"""
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    return _hashlib.md5(data).hexdigest()
+
+
+def _build_digest_auth(username, password, method, uri, auth_params, nc=1):
+    """Build Digest Authorization header value"""
+    realm = auth_params.get('realm', '')
+    nonce = auth_params.get('nonce', '')
+    qop = auth_params.get('qop', '')
+    algorithm = auth_params.get('algorithm', 'MD5').upper()
+    opaque = auth_params.get('opaque', '')
+
+    # Only MD5 supported
+    if algorithm not in ('MD5', 'MD5-SESS'):
+        raise HttpClientError(f"Unsupported digest algorithm: {algorithm}")
+
+    # HA1
+    ha1 = _md5_hex(f"{username}:{realm}:{password}")
+    if algorithm == 'MD5-SESS':
+        cnonce = _md5_hex(str(nc))[:8]
+        ha1 = _md5_hex(f"{ha1}:{nonce}:{cnonce}")
+
+    # HA2
+    ha2 = _md5_hex(f"{method}:{uri}")
+
+    # Response
+    nc_str = f"{nc:08x}"
+    cnonce = _md5_hex(str(nc))[:8]
+
+    if qop:
+        qop_value = qop.split(',')[0].strip()  # Use first qop option
+        response = _md5_hex(
+            f"{ha1}:{nonce}:{nc_str}:{cnonce}:{qop_value}:{ha2}")
+    else:
+        qop_value = None
+        response = _md5_hex(f"{ha1}:{nonce}:{ha2}")
+
+    # Build header
+    parts = [
+        f'username="{username}"',
+        f'realm="{realm}"',
+        f'nonce="{nonce}"',
+        f'uri="{uri}"',
+        f'response="{response}"',
+    ]
+    if qop_value:
+        parts.extend([
+            f'qop={qop_value}',
+            f'nc={nc_str}',
+            f'cnonce="{cnonce}"',
+        ])
+    if opaque:
+        parts.append(f'opaque="{opaque}"')
+    if algorithm != 'MD5':
+        parts.append(f'algorithm={algorithm}')
+
+    return 'Digest ' + ', '.join(parts)
 
 
 class HttpResponse:
@@ -187,14 +287,17 @@ class HttpClient:
     """
 
     def __init__(
-            self, url_or_host, port=None, ssl_context=None,
+            self, url_or_host, port=None, ssl_context=None, auth=None,
             connect_timeout=CONNECT_TIMEOUT, idle_timeout=IDLE_TIMEOUT,
             max_response_length=MAX_RESPONSE_LENGTH):
         # Parse URL if provided
         if '://' in url_or_host or url_or_host.startswith('http'):
-            host, parsed_port, base_path, use_ssl = parse_url(url_or_host)
+            host, parsed_port, base_path, use_ssl, url_auth = parse_url(
+                url_or_host)
             if port is None:
                 port = parsed_port
+            if auth is None:
+                auth = url_auth
             if use_ssl and ssl_context is None:
                 if hasattr(_ssl, 'create_default_context'):
                     ssl_context = _ssl.create_default_context()
@@ -211,6 +314,9 @@ class HttpClient:
         self._port = port
         self._base_path = base_path.rstrip('/')
         self._ssl_context = ssl_context
+        self._auth = auth
+        self._digest_params = None
+        self._digest_nc = 0
         self._connect_timeout = connect_timeout
         self._idle_timeout = idle_timeout
         self._max_response_length = max_response_length
@@ -222,6 +328,10 @@ class HttpClient:
 
         self._request_method = None
         self._request_path = None
+        self._request_headers = None
+        self._request_data = None
+        self._request_query = None
+        self._request_auth = None
 
         self._response_status = None
         self._response_status_message = None
@@ -240,6 +350,14 @@ class HttpClient:
     @property
     def cookies(self):
         return self._cookies
+
+    @property
+    def auth(self):
+        return self._auth
+
+    @auth.setter
+    def auth(self, value):
+        self._auth = value
 
     @property
     def host(self):
@@ -306,6 +424,21 @@ class HttpClient:
                 f"{k}={v}" for k, v in self._cookies.items())
             headers[COOKIE] = cookie_str
 
+        # Use request-specific auth if set, otherwise client's default
+        auth = self._request_auth if self._request_auth is not None else self._auth
+        if auth and AUTHORIZATION not in headers:
+            if self._digest_params:
+                # Digest auth
+                self._digest_nc += 1
+                headers[AUTHORIZATION] = _build_digest_auth(
+                    auth[0], auth[1],
+                    method, full_path, self._digest_params, self._digest_nc)
+            else:
+                # Basic auth
+                credentials = f"{auth[0]}:{auth[1]}".encode('utf-8')
+                b64 = _binascii.b2a_base64(credentials).decode('ascii').strip()
+                headers[AUTHORIZATION] = f"Basic {b64}"
+
         lines = [f"{method} {full_path} HTTP/1.1"]
         for key, val in headers.items():
             lines.append(f"{key}: {val}")
@@ -355,6 +488,24 @@ class HttpClient:
             raise HttpConnectionError(f"Connect failed: {err}") from err
 
     def _finalize_response(self):
+        # Handle 401 Digest challenge
+        auth = self._request_auth if self._request_auth is not None else self._auth
+        if (self._response_status == 401 and
+                auth and
+                not self._digest_params):
+            www_auth = self._response_headers.get(WWW_AUTHENTICATE, '')
+            if www_auth.lower().startswith('digest '):
+                # Parse digest params and retry
+                self._digest_params = _parse_www_authenticate(www_auth)
+                self._digest_nc = 0
+                # Close connection if server requested
+                if not self._should_keep_alive():
+                    self._close()
+                # Reset for retry, but keep request params
+                self._reset_request(clear_request=False)
+                self._start_request()
+                return None  # Signal to continue waiting
+
         response = HttpResponse(
             self._response_status,
             self._response_status_message,
@@ -365,7 +516,7 @@ class HttpClient:
         if not self._should_keep_alive():
             self._close()
         else:
-            self._buffer = bytearray()
+            self._reset_request()
             self._state = STATE_IDLE
 
         return response
@@ -461,9 +612,14 @@ class HttpClient:
         self._buffer.extend(data)
         return True
 
-    def _reset_request(self):
-        self._request_method = None
-        self._request_path = None
+    def _reset_request(self, clear_request=True):
+        if clear_request:
+            self._request_method = None
+            self._request_path = None
+            self._request_headers = None
+            self._request_data = None
+            self._request_query = None
+            self._request_auth = None
         self._response_status = None
         self._response_status_message = None
         self._response_headers = None
@@ -535,7 +691,10 @@ class HttpClient:
                     self._process_recv_body()
 
             if self._state == STATE_COMPLETE:
-                return self._finalize_response()
+                response = self._finalize_response()
+                if response is not None:
+                    return response
+                # None means digest retry, continue processing
 
         except (HttpConnectionError, HttpTimeoutError, HttpResponseError):
             self._close()
@@ -549,8 +708,11 @@ class HttpClient:
 
     def request(
             self, method, path,
-            headers=None, data=None, query=None, json=None):
-        """Start HTTP request (async), returns self for chaining"""
+            headers=None, data=None, query=None, json=None, auth=None):
+        """Start HTTP request (async), returns self for chaining
+
+        auth parameter overrides client's default auth for this request.
+        """
         if json is not None:
             data = json
 
@@ -560,19 +722,29 @@ class HttpClient:
         self._reset_request()
         self._request_method = method
         self._request_path = path
+        self._request_headers = dict(headers) if headers else {}
+        self._request_data = data
+        self._request_query = query
+        self._request_auth = auth  # None means use client's default
 
+        self._start_request()
+
+        return self
+
+    def _start_request(self):
+        """Internal: start sending current request"""
         if not self.is_connected:
             self._connect()
 
-        headers_copy = dict(headers) if headers else {}
+        # Make copy to avoid modifying stored headers
+        headers_copy = dict(self._request_headers) if self._request_headers else {}
         request_data = self._build_request(
-            method, path, headers_copy, data, query)
+            self._request_method, self._request_path,
+            headers_copy, self._request_data, self._request_query)
         self._send_buffer.extend(request_data)
         self._state = STATE_SENDING
 
         self._try_send()
-
-        return self
 
     def wait(self, timeout=None):
         """Wait for response (blocking),
@@ -584,22 +756,26 @@ class HttpClient:
             timeout = self._idle_timeout
 
         try:
-            while self._state != STATE_COMPLETE:
-                if self._state == STATE_SENDING:
-                    _, w, _ = _select.select([], [self._socket], [], timeout)
-                    if not w:
-                        return None
-                    self._try_send()
-                else:
-                    r, _, _ = _select.select([self._socket], [], [], timeout)
-                    if not r:
-                        return None
-                    if self._state == STATE_RECEIVING_HEADERS:
-                        self._process_recv_headers()
+            while True:
+                while self._state != STATE_COMPLETE:
+                    if self._state == STATE_SENDING:
+                        _, w, _ = _select.select([], [self._socket], [], timeout)
+                        if not w:
+                            return None
+                        self._try_send()
                     else:
-                        self._process_recv_body()
+                        r, _, _ = _select.select([self._socket], [], [], timeout)
+                        if not r:
+                            return None
+                        if self._state == STATE_RECEIVING_HEADERS:
+                            self._process_recv_headers()
+                        else:
+                            self._process_recv_body()
 
-            return self._finalize_response()
+                response = self._finalize_response()
+                if response is not None:
+                    return response
+                # None means digest retry, continue loop
 
         except (HttpConnectionError, HttpTimeoutError):
             self._close()
