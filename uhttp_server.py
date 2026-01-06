@@ -440,11 +440,16 @@ class HttpConnection():
         try:
             buffer = self._socket.recv(size - len(self._buffer))
         except OSError as err:
-            if err.errno == errno.EAGAIN:
+            if err.errno in (errno.EAGAIN, errno.ENOENT):
+                # EAGAIN: no data available (non-blocking)
+                # ENOENT: SSL handshake in progress (CPython)
                 return
             raise HttpDisconnected(f"{err}: {self.addr}") from err
         except MemoryError as err:
             raise HttpErrorWithResponse(413) from err
+        if buffer is None:
+            # MicroPython SSL: handshake in progress
+            return
         if not buffer:
             raise HttpDisconnected(f"Lost connection from client {self.addr}")
         self._rx_bytes_counter += len(buffer)
@@ -915,21 +920,21 @@ class HttpServer():
         except (OSError, AttributeError):
             pass
 
+        try:
+            cl_socket.setblocking(False)
+        except (OSError, AttributeError):
+            pass
+
         if self._ssl_context:
             try:
                 cl_socket = self._ssl_context.wrap_socket(
-                    cl_socket, server_side=True)
+                    cl_socket, server_side=True, do_handshake_on_connect=False)
             except OSError:
                 try:
                     cl_socket.close()
                 except OSError:
                     pass
                 return
-
-        try:
-            cl_socket.setblocking(False)
-        except (OSError, AttributeError):
-            pass
 
         connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
