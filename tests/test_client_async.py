@@ -151,6 +151,36 @@ class TestClientAsync(unittest.TestCase):
 
         client.close()
 
+    def test_process_events_timeout(self):
+        """Test process_events raises HttpTimeoutError on timeout"""
+        client = uhttp_client.HttpClient('localhost', port=self.PORT, timeout=0.1)
+        client.get('/slow')  # Server sleeps 0.2s
+
+        # Wait until timeout expires
+        time.sleep(0.2)
+
+        # process_events should raise timeout
+        with self.assertRaises(uhttp_client.HttpTimeoutError):
+            client.process_events([], [])
+
+        client.close()
+
+    def test_per_request_timeout(self):
+        """Test per-request timeout overrides client timeout"""
+        client = uhttp_client.HttpClient('localhost', port=self.PORT, timeout=10)
+
+        # Use short per-request timeout
+        client.get('/slow', timeout=0.1)
+
+        # Wait until timeout expires
+        time.sleep(0.2)
+
+        # process_events should raise timeout
+        with self.assertRaises(uhttp_client.HttpTimeoutError):
+            client.process_events([], [])
+
+        client.close()
+
 
 if __name__ == '__main__':
     unittest.main()

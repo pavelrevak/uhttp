@@ -10,12 +10,13 @@ import json as _json
 import ssl as _ssl
 import binascii as _binascii
 import hashlib as _hashlib
+import time as _time
 
 KB = 2 ** 10
 MB = 2 ** 20
 
 CONNECT_TIMEOUT = 10
-IDLE_TIMEOUT = 30
+TIMEOUT = 30
 
 MAX_RESPONSE_HEADERS_LENGTH = 4 * KB
 MAX_RESPONSE_LENGTH = 1 * MB
@@ -312,7 +313,7 @@ class HttpClient:
 
     def __init__(
             self, url_or_host, port=None, ssl_context=None, auth=None,
-            connect_timeout=CONNECT_TIMEOUT, idle_timeout=IDLE_TIMEOUT,
+            connect_timeout=CONNECT_TIMEOUT, timeout=TIMEOUT,
             max_response_length=MAX_RESPONSE_LENGTH):
         # Parse URL if provided
         if '://' in url_or_host or url_or_host.startswith('http'):
@@ -342,7 +343,7 @@ class HttpClient:
         self._digest_params = None
         self._digest_nc = 0
         self._connect_timeout = connect_timeout
-        self._idle_timeout = idle_timeout
+        self._timeout = timeout
         self._max_response_length = max_response_length
 
         self._socket = None
@@ -356,6 +357,8 @@ class HttpClient:
         self._request_data = None
         self._request_query = None
         self._request_auth = None
+        self._request_timeout = None
+        self._request_start_time = None
 
         self._response_status = None
         self._response_status_message = None
@@ -652,6 +655,8 @@ class HttpClient:
             self._request_data = None
             self._request_query = None
             self._request_auth = None
+            self._request_timeout = None
+            self._request_start_time = None
         self._response_status = None
         self._response_status_message = None
         self._response_headers = None
@@ -708,11 +713,15 @@ class HttpClient:
         return self.request('POST', path, **kwargs)
 
     def process_events(self, read_sockets, write_sockets):
-        """Process select events, returns HttpResponse when complete"""
+        """Process select events, returns HttpResponse when complete
+
+        Raises HttpTimeoutError if request timeout has expired and no data ready.
+        """
         if self._state == STATE_IDLE:
             return None
 
         try:
+            # First process any ready sockets - response may have arrived
             if self._socket in write_sockets and self._state == STATE_SENDING:
                 self._try_send()
 
@@ -732,6 +741,13 @@ class HttpClient:
             self._close()
             raise
 
+        # Check timeout only if no complete response yet
+        if self._request_start_time is not None:
+            timeout = self._request_timeout if self._request_timeout is not None else self._timeout
+            if timeout and _time.time() - self._request_start_time > timeout:
+                self._close()
+                raise HttpTimeoutError("Request timed out")
+
         return None
 
     def put(self, path, **kwargs):
@@ -740,10 +756,12 @@ class HttpClient:
 
     def request(
             self, method, path,
-            headers=None, data=None, query=None, json=None, auth=None):
+            headers=None, data=None, query=None, json=None, auth=None,
+            timeout=None):
         """Start HTTP request (async), returns self for chaining
 
         auth parameter overrides client's default auth for this request.
+        timeout parameter overrides client's default timeout for this request.
         """
         if json is not None:
             data = json
@@ -758,6 +776,8 @@ class HttpClient:
         self._request_data = data
         self._request_query = query
         self._request_auth = auth  # None means use client's default
+        self._request_timeout = timeout  # None means use client's default
+        self._request_start_time = _time.time()
 
         self._start_request()
 
@@ -779,38 +799,48 @@ class HttpClient:
         self._try_send()
 
     def wait(self, timeout=None):
-        """Wait for response (blocking),
-        returns HttpResponse or None on timeout"""
+        """Wait for response (blocking).
+
+        Returns HttpResponse when complete, None if timeout expires.
+        Connection stays open on timeout - wait() can be called again.
+
+        timeout is the max time to spend in this wait() call.
+        If None, uses request timeout or client default.
+        Request timeout (set via request() or client default) is checked
+        separately by process_events() and raises HttpTimeoutError.
+        """
         if self._state == STATE_IDLE:
             raise HttpClientError("No request in progress")
 
         if timeout is None:
-            timeout = self._idle_timeout
+            timeout = self._request_timeout if self._request_timeout is not None else self._timeout
 
-        try:
-            while True:
-                while self._state != STATE_COMPLETE:
-                    if self._state == STATE_SENDING:
-                        _, w, _ = _select.select([], [self._socket], [], timeout)
-                        if not w:
-                            self._close()
-                            return None
-                        self._try_send()
-                    else:
-                        r, _, _ = _select.select([self._socket], [], [], timeout)
-                        if not r:
-                            self._close()
-                            return None
-                        if self._state == STATE_RECEIVING_HEADERS:
-                            self._process_recv_headers()
-                        else:
-                            self._process_recv_body()
+        start_time = _time.time()
 
-                response = self._finalize_response()
-                if response is not None:
-                    return response
-                # None means digest retry, continue loop
+        while True:
+            # Calculate remaining time for this wait() call
+            if timeout:
+                elapsed = _time.time() - start_time
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    return None  # wait timeout, can call again
+            else:
+                remaining = None
 
-        except (HttpConnectionError, HttpTimeoutError):
-            self._close()
-            raise
+            r, w, _ = _select.select(
+                self.read_sockets,
+                self.write_sockets,
+                [], remaining
+            )
+
+            # Always call process_events to check request timeout
+            response = self.process_events(r, w)
+
+            if not r and not w:
+                return None  # wait timeout
+            if response is not None:
+                return response
+
+            # Check if we're done (state changed to IDLE after digest retry failure)
+            if self._state == STATE_IDLE:
+                return None

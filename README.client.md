@@ -240,25 +240,28 @@ while True:
 
 **`parse_url(url)`**
 
-Parse URL into components. Returns `(host, port, path, ssl)` tuple.
+Parse URL into components. Returns `(host, port, path, ssl, auth)` tuple.
 
 ```python
 from uhttp_client import parse_url
 
 parse_url('https://api.example.com/v1/users')
-# → ('api.example.com', 443, '/v1/users', True)
+# → ('api.example.com', 443, '/v1/users', True, None)
 
 parse_url('http://localhost:8080/api')
-# → ('localhost', 8080, '/api', False)
+# → ('localhost', 8080, '/api', False, None)
+
+parse_url('https://user:pass@api.example.com')
+# → ('api.example.com', 443, '', True, ('user', 'pass'))
 
 parse_url('example.com')
-# → ('example.com', 80, '', False)
+# → ('example.com', 80, '', False, None)
 ```
 
 
 ### Class `HttpClient`
 
-**`HttpClient(url_or_host, port=None, ssl_context=None, auth=None, connect_timeout=10, idle_timeout=30, max_response_length=1MB)`**
+**`HttpClient(url_or_host, port=None, ssl_context=None, auth=None, connect_timeout=10, timeout=30, max_response_length=1MB)`**
 
 Can be initialized with URL or host/port:
 
@@ -279,7 +282,7 @@ Parameters:
 - `ssl_context` - Optional `ssl.SSLContext` (auto-created for https:// URLs)
 - `auth` - Optional (username, password) tuple for HTTP authentication
 - `connect_timeout` - Connection timeout in seconds (default: 10)
-- `idle_timeout` - Idle/response timeout in seconds (default: 30)
+- `timeout` - Response timeout in seconds (default: 30)
 - `max_response_length` - Maximum response size (default: 1MB)
 
 #### Properties
@@ -296,7 +299,7 @@ Parameters:
 
 #### Methods
 
-**`request(method, path, headers=None, data=None, query=None, json=None, auth=None)`**
+**`request(method, path, headers=None, data=None, query=None, json=None, auth=None, timeout=None)`**
 
 Start HTTP request (async). Returns `self` for chaining.
 
@@ -307,6 +310,7 @@ Start HTTP request (async). Returns `self` for chaining.
 - `query` - Optional query parameters dict
 - `json` - Shortcut for data with JSON encoding
 - `auth` - Optional (username, password) tuple, overrides client's default auth
+- `timeout` - Optional timeout in seconds, overrides client's default timeout
 
 **`get(path, **kwargs)`** - Send GET request
 
@@ -322,11 +326,18 @@ Start HTTP request (async). Returns `self` for chaining.
 
 **`wait(timeout=None)`**
 
-Wait for response (blocking). Returns `HttpResponse` or `None` on timeout.
+Wait for response (blocking). Returns `HttpResponse` when complete.
+
+- `timeout` - Max time to spend in wait() call. If `None`, uses request timeout.
+- Returns `None` if wait timeout expires (connection stays open, can call again).
+- Raises `HttpTimeoutError` if request timeout expires (connection closed).
 
 **`process_events(read_sockets, write_sockets)`**
 
 Process select events. Returns `HttpResponse` when complete, `None` otherwise.
+
+- First processes any ready data, then checks request timeout.
+- Raises `HttpTimeoutError` if request timeout has expired and no complete response.
 
 **`close()`**
 
@@ -433,6 +444,41 @@ client.close()
 ```
 
 
+## Timeouts
+
+Two types of timeouts:
+
+### Request timeout
+
+Total time allowed for the request. Set via `timeout` parameter on client or per-request.
+When expired, raises `HttpTimeoutError` and closes connection.
+
+```python
+# Client-level timeout (default for all requests)
+client = HttpClient('https://example.com', timeout=30)
+
+# Per-request timeout (overrides client default)
+response = client.get('/slow', timeout=60).wait()
+```
+
+### Wait timeout
+
+Time to spend in `wait()` call. When expired, returns `None` but keeps connection open.
+Useful for polling or interleaving with other work.
+
+```python
+client = HttpClient('https://example.com', timeout=60)  # request timeout
+client.get('/slow')
+
+# Try for 5 seconds, then do something else
+response = client.wait(timeout=5)
+if response is None:
+    print("Still waiting, doing other work...")
+    # Can call wait() again
+    response = client.wait(timeout=10)
+```
+
+
 ## Error handling
 
 ```python
@@ -465,7 +511,7 @@ finally:
 
 ```python
 CONNECT_TIMEOUT = 10              # seconds
-IDLE_TIMEOUT = 30                 # seconds
+TIMEOUT = 30                      # seconds
 MAX_RESPONSE_HEADERS_LENGTH = 4KB
 MAX_RESPONSE_LENGTH = 1MB
 ```

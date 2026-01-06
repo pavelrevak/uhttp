@@ -65,15 +65,28 @@ class TestClientTimeoutErrors(unittest.TestCase):
             cls.server.close()
             cls.server = None
 
-    def test_timeout_returns_none(self):
-        """Test request timeout returns None"""
+    def test_wait_timeout_returns_none(self):
+        """Test wait timeout returns None (request timeout not expired yet)"""
         client = uhttp_client.HttpClient(
             'localhost', port=self.PORT,
-            idle_timeout=0.3
+            timeout=10  # long request timeout
         )
         try:
+            # Short wait timeout - should return None without raising
             response = client.get('/slow').wait(timeout=0.3)
             self.assertIsNone(response)
+        finally:
+            client.close()
+
+    def test_request_timeout_raises(self):
+        """Test request timeout raises HttpTimeoutError"""
+        client = uhttp_client.HttpClient(
+            'localhost', port=self.PORT,
+            timeout=0.3  # short request timeout
+        )
+        try:
+            with self.assertRaises(uhttp_client.HttpTimeoutError):
+                client.get('/slow').wait()
         finally:
             client.close()
 
@@ -81,7 +94,7 @@ class TestClientTimeoutErrors(unittest.TestCase):
         """Test normal request with timeout succeeds"""
         client = uhttp_client.HttpClient(
             'localhost', port=self.PORT,
-            idle_timeout=5
+            timeout=5
         )
         response = client.get('/fast').wait(timeout=5)
 

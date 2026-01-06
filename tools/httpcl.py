@@ -99,7 +99,7 @@ def main():
     # Parse URL
     url = args.url if '://' in args.url else 'http://' + args.url
     try:
-        host, port, path, use_ssl = _uhttp_client.parse_url(url)
+        host, port, path, use_ssl, auth = _uhttp_client.parse_url(url)
     except Exception as e:
         print(f"Error parsing URL: {e}", file=sys.stderr)
         sys.exit(1)
@@ -189,7 +189,7 @@ def main():
     try:
         client = _uhttp_client.HttpClient(
             host, port=port, ssl_context=ssl_context,
-            idle_timeout=args.timeout
+            timeout=args.timeout, auth=auth
         )
 
         if isinstance(data, (dict, list)):
