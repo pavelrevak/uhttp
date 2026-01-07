@@ -410,6 +410,11 @@ class HttpConnection():
         return len(self._send_buffer) > 0 or self._file_handle is not None
 
     @property
+    def send_buffer_size(self):
+        """Size of pending send buffer in bytes"""
+        return len(self._send_buffer)
+
+    @property
     def content_type(self):
         """Content type"""
         return self.headers_get_attribute(CONTENT_TYPE, '')
@@ -904,6 +909,8 @@ class HttpServer():
     def _cleanup_idle_connections(self):
         """Remove timed out idle connections"""
         for connection in list(self._waiting_connections):
+            if connection._is_multipart:
+                continue
             if not connection.is_loaded and connection.is_timed_out:
                 connection.respond(
                     'Request Timeout', status=408,
