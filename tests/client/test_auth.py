@@ -56,7 +56,7 @@ class TestClientBasicAuth(unittest.TestCase):
     def test_basic_auth_success(self):
         """Test successful basic auth"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             auth=('testuser', 'testpass')
         )
         response = client.get('/protected').wait()
@@ -68,7 +68,7 @@ class TestClientBasicAuth(unittest.TestCase):
     def test_basic_auth_url(self):
         """Test basic auth from URL"""
         client = uhttp_client.HttpClient(
-            f'http://testuser:testpass@localhost:{self.PORT}'
+            f'http://testuser:testpass@127.0.0.1:{self.PORT}'
         )
         response = client.get('/protected').wait()
 
@@ -79,7 +79,7 @@ class TestClientBasicAuth(unittest.TestCase):
     def test_basic_auth_failure(self):
         """Test failed basic auth"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             auth=('wrong', 'credentials')
         )
         response = client.get('/protected').wait()
@@ -89,7 +89,7 @@ class TestClientBasicAuth(unittest.TestCase):
 
     def test_no_auth(self):
         """Test request without auth"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/protected').wait()
 
         self.assertEqual(response.status, 401)
@@ -97,7 +97,7 @@ class TestClientBasicAuth(unittest.TestCase):
 
     def test_per_request_auth(self):
         """Test auth parameter in request overrides client auth"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Without auth - should fail
         response = client.get('/protected').wait()
@@ -111,7 +111,7 @@ class TestClientBasicAuth(unittest.TestCase):
 
     def test_auth_property_setter(self):
         """Test setting auth after client creation"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # No auth initially
         response = client.get('/protected').wait()
@@ -200,7 +200,7 @@ class TestClientDigestAuth(unittest.TestCase):
     def test_digest_auth_success(self):
         """Test successful digest auth (automatic retry after 401)"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             auth=('digestuser', 'digestpass')
         )
         response = client.get('/protected').wait()
@@ -212,7 +212,7 @@ class TestClientDigestAuth(unittest.TestCase):
     def test_digest_auth_wrong_password(self):
         """Test digest auth with wrong password"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             auth=('digestuser', 'wrongpass')
         )
         response = client.get('/protected').wait()
@@ -222,7 +222,7 @@ class TestClientDigestAuth(unittest.TestCase):
 
     def test_digest_auth_per_request(self):
         """Test digest auth in request parameter"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         response = client.get(
             '/protected',
@@ -236,7 +236,7 @@ class TestClientDigestAuth(unittest.TestCase):
     def test_digest_multiple_requests(self):
         """Test digest auth works for multiple requests"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             auth=('digestuser', 'digestpass')
         )
 

@@ -68,7 +68,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_simple_get(self):
         """Test simple GET request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/test').wait()
 
         self.assertIsNotNone(response)
@@ -78,7 +78,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_get_with_query(self):
         """Test GET with query parameters"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/test', query={'a': '1', 'b': '2'}).wait()
 
         self.assertIsNotNone(response)
@@ -87,7 +87,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_post_json(self):
         """Test POST with JSON body"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.post('/json', json={'key': 'value', 'num': 42}).wait()
 
         self.assertIsNotNone(response)
@@ -98,7 +98,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_put_json(self):
         """Test PUT request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.put('/json', json={'update': True}).wait()
 
         self.assertIsNotNone(response)
@@ -107,7 +107,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_delete(self):
         """Test DELETE request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.delete('/test').wait()
 
         self.assertIsNotNone(response)
@@ -116,7 +116,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_head(self):
         """Test HEAD request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.head('/test').wait()
 
         self.assertIsNotNone(response)
@@ -125,7 +125,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_patch(self):
         """Test PATCH request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.patch('/json', json={'patch': True}).wait()
 
         self.assertIsNotNone(response)
@@ -134,7 +134,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_binary_response(self):
         """Test receiving binary data"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/binary').wait()
 
         self.assertEqual(response.data, b'\x00\x01\x02\xff\xfe\xfd')
@@ -142,7 +142,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_large_response(self):
         """Test receiving large response"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/large').wait()
 
         self.assertEqual(len(response.data), 10000)
@@ -150,7 +150,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_post_binary_data(self):
         """Test sending binary data"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         binary_data = b'\x00\x01\x02\xff'
         response = client.post('/echo', data=binary_data).wait()
 
@@ -159,7 +159,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_post_string_data(self):
         """Test sending string data"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.post('/echo', data='hello world').wait()
 
         self.assertEqual(response.data, b'hello world')
@@ -167,7 +167,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_custom_headers(self):
         """Test custom headers are sent"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/headers', headers={
             'X-Custom': 'custom-value',
             'X-Another': 'another-value'
@@ -180,7 +180,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_user_agent_header(self):
         """Test User-Agent header is set"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/headers').wait()
 
         headers = response.json()['headers']
@@ -189,7 +189,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_status_404(self):
         """Test 404 response"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/status', query={'code': '404'}).wait()
 
         self.assertEqual(response.status, 404)
@@ -197,7 +197,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_status_500(self):
         """Test 500 response"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/status', query={'code': '500'}).wait()
 
         self.assertEqual(response.status, 500)
@@ -205,7 +205,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_response_properties(self):
         """Test response properties"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         response = client.get('/json').wait()
 
         self.assertEqual(response.status, 200)
@@ -216,7 +216,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_url_init(self):
         """Test client initialization with URL"""
-        client = uhttp_client.HttpClient(f'http://localhost:{self.PORT}/api')
+        client = uhttp_client.HttpClient(f'http://127.0.0.1:{self.PORT}/api')
         response = client.get('/test').wait()
 
         self.assertEqual(self.last_request['path'], '/api/test')
@@ -224,7 +224,7 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_base_path(self):
         """Test base_path is prepended to requests"""
-        client = uhttp_client.HttpClient(f'http://localhost:{self.PORT}/v1/api')
+        client = uhttp_client.HttpClient(f'http://127.0.0.1:{self.PORT}/v1/api')
 
         client.get('/users').wait()
         self.assertEqual(self.last_request['path'], '/v1/api/users')
@@ -236,13 +236,13 @@ class TestClientBasicRequests(unittest.TestCase):
 
     def test_context_manager(self):
         """Test client as context manager"""
-        with uhttp_client.HttpClient('localhost', port=self.PORT) as client:
+        with uhttp_client.HttpClient('127.0.0.1', port=self.PORT) as client:
             response = client.get('/test').wait()
             self.assertEqual(response.status, 200)
 
     def test_fluent_api(self):
         """Test fluent API (method chaining)"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         result = client.get('/test')
         self.assertIs(result, client)
         response = result.wait()

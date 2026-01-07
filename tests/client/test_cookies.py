@@ -56,7 +56,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_receive_cookies(self):
         """Test cookies are received and stored"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         client.get('/set-cookie').wait()
 
         self.assertIn('session', client.cookies)
@@ -67,7 +67,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_send_cookies(self):
         """Test cookies are sent with requests"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         client._cookies = {'my_cookie': 'my_value'}
         response = client.get('/get-cookies').wait()
 
@@ -77,7 +77,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_cookies_persist(self):
         """Test cookies persist across requests"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # First request sets cookies
         client.get('/set-cookie').wait()
@@ -91,7 +91,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_cookies_accumulate(self):
         """Test new cookies are added to existing ones"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Set first cookie
         client.get('/set-single').wait()
@@ -107,7 +107,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_cookies_property(self):
         """Test cookies property access"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Initially empty
         self.assertEqual(client.cookies, {})
@@ -121,7 +121,7 @@ class TestClientCookies(unittest.TestCase):
 
     def test_manual_cookie_setting(self):
         """Test manually setting cookies"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Set cookie manually
         client._cookies['manual'] = 'set_manually'

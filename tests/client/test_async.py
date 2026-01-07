@@ -47,7 +47,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_process_events(self):
         """Test async processing with process_events"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
         client.get('/test')
 
         response = None
@@ -67,7 +67,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_read_write_sockets_before_request(self):
         """Test socket lists are empty before request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         self.assertEqual(client.read_sockets, [])
         self.assertEqual(client.write_sockets, [])
@@ -76,7 +76,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_state_transitions(self):
         """Test client state transitions during request"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Initial state
         self.assertEqual(client.state, uhttp_client.STATE_IDLE)
@@ -103,7 +103,7 @@ class TestClientAsync(unittest.TestCase):
     def test_multiple_clients_select(self):
         """Test multiple clients in single select loop"""
         clients = [
-            uhttp_client.HttpClient('localhost', port=self.PORT)
+            uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
             for _ in range(3)
         ]
 
@@ -144,7 +144,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_process_events_idle_returns_none(self):
         """Test process_events returns None when idle"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         result = client.process_events([], [])
         self.assertIsNone(result)
@@ -153,7 +153,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_process_events_timeout(self):
         """Test process_events raises HttpTimeoutError on timeout"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT, timeout=0.1)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT, timeout=0.1)
         client.get('/slow')  # Server sleeps 0.2s
 
         # Wait until timeout expires
@@ -167,7 +167,7 @@ class TestClientAsync(unittest.TestCase):
 
     def test_per_request_timeout(self):
         """Test per-request timeout overrides client timeout"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT, timeout=10)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT, timeout=10)
 
         # Use short per-request timeout
         client.get('/slow', timeout=0.1)

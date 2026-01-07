@@ -550,3 +550,27 @@ PYTHONPATH=. python tools/httpcl.py https://httpbin.org/image/png -o image.png
 ```
 
 See `tools/httpcl.py --help` for all options.
+
+
+## Known Limitations
+
+### IPv6 Not Supported
+
+Client currently supports only IPv4:
+- Uses `getaddrinfo()` which may return IPv6 addresses first on some systems (Linux)
+- When server listens only on IPv4, connection to `localhost` may fail on Linux
+
+**Workaround:** Use explicit IPv4 addresses:
+
+```python
+# May fail on Linux (localhost can resolve to ::1)
+client = HttpClient('http://localhost:8080')
+
+# Always works
+client = HttpClient('http://127.0.0.1:8080')
+```
+
+
+## TODO
+
+- IPv6 support (requires MicroPython testing)

@@ -14,7 +14,7 @@ class TestClientConnectionErrors(unittest.TestCase):
 
     def test_connection_refused(self):
         """Test connection to closed port raises error"""
-        client = uhttp_client.HttpClient('localhost', port=59999)
+        client = uhttp_client.HttpClient('127.0.0.1', port=59999)
 
         with self.assertRaises(uhttp_client.HttpConnectionError):
             client.get('/test').wait()
@@ -68,7 +68,7 @@ class TestClientTimeoutErrors(unittest.TestCase):
     def test_wait_timeout_returns_none(self):
         """Test wait timeout returns None (request timeout not expired yet)"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             timeout=10  # long request timeout
         )
         try:
@@ -81,7 +81,7 @@ class TestClientTimeoutErrors(unittest.TestCase):
     def test_request_timeout_raises(self):
         """Test request timeout raises HttpTimeoutError"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             timeout=0.3  # short request timeout
         )
         try:
@@ -93,7 +93,7 @@ class TestClientTimeoutErrors(unittest.TestCase):
     def test_normal_request_succeeds(self):
         """Test normal request with timeout succeeds"""
         client = uhttp_client.HttpClient(
-            'localhost', port=self.PORT,
+            '127.0.0.1', port=self.PORT,
             timeout=5
         )
         response = client.get('/fast').wait(timeout=5)
@@ -138,7 +138,7 @@ class TestClientRequestErrors(unittest.TestCase):
 
     def test_request_while_busy(self):
         """Test starting new request while one is in progress"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Start first request
         client.get('/test')
@@ -153,7 +153,7 @@ class TestClientRequestErrors(unittest.TestCase):
 
     def test_wait_without_request(self):
         """Test wait without active request raises error"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         with self.assertRaises(uhttp_client.HttpClientError):
             client.wait()
@@ -162,7 +162,7 @@ class TestClientRequestErrors(unittest.TestCase):
 
     def test_unsupported_data_type(self):
         """Test unsupported data type raises error"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         with self.assertRaises(uhttp_client.HttpClientError):
             client.post('/test', data=12345)  # int not supported

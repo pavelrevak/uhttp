@@ -43,7 +43,7 @@ class TestClientKeepalive(unittest.TestCase):
 
     def test_connection_reuse(self):
         """Test connection is reused for multiple requests"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         for i in range(5):
             response = client.get('/test', query={'n': str(i)}).wait()
@@ -56,7 +56,7 @@ class TestClientKeepalive(unittest.TestCase):
 
     def test_is_connected_property(self):
         """Test is_connected property"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # Before any request
         self.assertFalse(client.is_connected)
@@ -71,7 +71,7 @@ class TestClientKeepalive(unittest.TestCase):
 
     def test_multiple_requests_same_client(self):
         """Test multiple sequential requests on same client"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         response1 = client.get('/path1').wait()
         self.assertEqual(response1.json()['path'], '/path1')
@@ -86,7 +86,7 @@ class TestClientKeepalive(unittest.TestCase):
 
     def test_close_and_reconnect(self):
         """Test closing and making new request reconnects"""
-        client = uhttp_client.HttpClient('localhost', port=self.PORT)
+        client = uhttp_client.HttpClient('127.0.0.1', port=self.PORT)
 
         # First request
         response1 = client.get('/test1').wait()

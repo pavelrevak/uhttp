@@ -402,8 +402,27 @@ Parameters:
 - Finish multipart stream
 
 
+## Known Limitations
+
+### IPv6 Not Supported
+
+Server currently supports only IPv4:
+- Creates IPv4 socket (`AF_INET`) and binds to `0.0.0.0` by default
+- To listen on specific interface, use explicit IPv4 address
+
+```python
+# Works
+server = HttpServer(address='0.0.0.0', port=80)      # all IPv4 interfaces
+server = HttpServer(address='192.168.1.100', port=80) # specific IPv4
+
+# Does NOT work
+server = HttpServer(address='::', port=80)           # IPv6 not supported
+```
+
+
 ## TODO
 
+- IPv6 support (requires MicroPython testing)
 - Cookie attributes support (Path, Domain, Secure, HttpOnly, SameSite, Expires)
 - Expect: 100-continue support - currently causes deadlock (client waits for 100, server waits for body)
 - Streaming API for large data (receiving and sending):
