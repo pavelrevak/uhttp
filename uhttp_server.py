@@ -302,7 +302,10 @@ class HttpConnection():
         forwarded = self.headers_get_attribute('x-forwarded-for')
         if forwarded:
             return forwarded.split(',')[0]
-        return f"{self._addr[0]}:{self._addr[1]}"
+        addr = self._addr[0]
+        if addr.startswith('::ffff:'):
+            addr = addr[7:]  # Remove IPv4-mapped prefix
+        return f"{addr}:{self._addr[1]}"
 
     @property
     def remote_addresses(self):
@@ -860,10 +863,21 @@ class HttpServer():
     """HTTP server"""
 
     def __init__(self, address='0.0.0.0', port=80, ssl_context=None, **kwargs):
-        """IP address and port of listening interface for HTTP"""
+        """IP address and port of listening interface for HTTP
+
+        For IPv6 dual-stack (accepts both IPv4 and IPv6), use address='::'
+        """
         self._kwargs = kwargs
         self._ssl_context = ssl_context
-        self._socket = _socket.socket()
+        if ':' in address:
+            self._socket = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+            try:
+                self._socket.setsockopt(
+                    _socket.IPPROTO_IPV6, _socket.IPV6_V6ONLY, 0)
+            except (AttributeError, OSError):
+                pass
+        else:
+            self._socket = _socket.socket()
         self._socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         self._socket.bind((address, port))
         self._socket.listen(kwargs.get('listen', LISTEN_SOCKETS))
