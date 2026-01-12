@@ -17,10 +17,12 @@
 ## Installation
 
 ```bash
-pip install micro-uhttp
+pip install git+https://github.com/pavelrevak/uhttp.git
 ```
 
 Or copy the `uhttp/` directory to your project.
+
+For MicroPython, copy `uhttp/server.py` and/or `uhttp/client.py` to your device.
 
 
 ## Testing

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "micro-uhttp"
 version = "2.0.0"
 description = "Micro HTTP server and client for Python and MicroPython"
+readme = "README.md"
 authors = [
     {name = "Pavel Revak", email = "pavelrevak@gmail.com"}
 ]
@@ -17,6 +18,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pavelrevak/uhttp"
+Repository = "https://github.com/pavelrevak/uhttp"
 
 [tool.setuptools.packages.find]
 include = ["uhttp*"]
