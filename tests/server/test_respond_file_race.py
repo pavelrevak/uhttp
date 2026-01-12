@@ -12,7 +12,7 @@ import time
 import tempfile
 import os
 import select
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 class TestRespondFileRace(unittest.TestCase):

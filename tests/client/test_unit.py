@@ -3,7 +3,7 @@
 Unit tests for uhttp_client - no network required
 """
 import unittest
-import uhttp_client
+from uhttp import client as uhttp_client
 
 
 class TestParseUrl(unittest.TestCase):

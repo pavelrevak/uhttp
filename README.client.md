@@ -21,41 +21,43 @@
 ### URL-based initialization (recommended)
 
 ```python
-from uhttp_client import HttpClient
+import uhttp.client
 
 # HTTPS with automatic SSL context
-client = HttpClient('https://api.example.com')
+client = uhttp.client.HttpClient('https://api.example.com')
 response = client.get('/users').wait()
 client.close()
 
 # With base path for API versioning
-client = HttpClient('https://api.example.com/v1')
+client = uhttp.client.HttpClient('https://api.example.com/v1')
 response = client.get('/users').wait()  # requests /v1/users
 client.close()
 
 # HTTP
-client = HttpClient('http://localhost:8080')
+client = uhttp.client.HttpClient('http://localhost:8080')
 ```
 
 ### Traditional initialization
 
 ```python
-from uhttp_client import HttpClient
+import uhttp.client
 
-client = HttpClient('httpbin.org', port=80)
+client = uhttp.client.HttpClient('httpbin.org', port=80)
 response = client.get('/get').wait()
 client.close()
 
 # With explicit SSL context
 import ssl
 ctx = ssl.create_default_context()
-client = HttpClient('api.example.com', port=443, ssl_context=ctx)
+client = uhttp.client.HttpClient('api.example.com', port=443, ssl_context=ctx)
 ```
 
 ### Context manager
 
 ```python
-with HttpClient('https://httpbin.org') as client:
+import uhttp.client
+
+with uhttp.client.HttpClient('https://httpbin.org') as client:
     response = client.get('/get').wait()
     print(response.status)
 ```
@@ -63,7 +65,7 @@ with HttpClient('https://httpbin.org') as client:
 ### JSON API
 
 ```python
-client = HttpClient('https://api.example.com/v1')
+client = uhttp.client.HttpClient('https://api.example.com/v1')
 
 # GET with query parameters
 response = client.get('/users', query={'page': 1, 'limit': 10}).wait()
@@ -106,10 +108,10 @@ image_bytes = response.data
 ### Automatic (with URL)
 
 ```python
-from uhttp_client import HttpClient
+import uhttp.client
 
 # SSL context created automatically for https:// URLs
-client = HttpClient('https://api.example.com')
+client = uhttp.client.HttpClient('https://api.example.com')
 response = client.get('/secure').wait()
 client.close()
 ```
@@ -118,10 +120,10 @@ client.close()
 
 ```python
 import ssl
-from uhttp_client import HttpClient
+import uhttp.client
 
 ctx = ssl.create_default_context()
-client = HttpClient('api.example.com', port=443, ssl_context=ctx)
+client = uhttp.client.HttpClient('api.example.com', port=443, ssl_context=ctx)
 response = client.get('/secure').wait()
 client.close()
 ```
@@ -130,10 +132,10 @@ client.close()
 
 ```python
 import ssl
-from uhttp_client import HttpClient
+import uhttp.client
 
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-client = HttpClient('api.example.com', port=443, ssl_context=ctx)
+client = uhttp.client.HttpClient('api.example.com', port=443, ssl_context=ctx)
 response = client.get('/secure').wait()
 client.close()
 ```
@@ -145,9 +147,9 @@ Default mode is async. Use with external select loop:
 
 ```python
 import select
-from uhttp_client import HttpClient
+import uhttp.client
 
-client = HttpClient('http://httpbin.org')
+client = uhttp.client.HttpClient('http://httpbin.org')
 
 # Start request (non-blocking)
 client.get('/delay/2')
@@ -172,12 +174,12 @@ client.close()
 
 ```python
 import select
-from uhttp_client import HttpClient
+import uhttp.client
 
 clients = [
-    HttpClient('http://httpbin.org'),
-    HttpClient('http://httpbin.org'),
-    HttpClient('http://httpbin.org'),
+    uhttp.client.HttpClient('http://httpbin.org'),
+    uhttp.client.HttpClient('http://httpbin.org'),
+    uhttp.client.HttpClient('http://httpbin.org'),
 ]
 
 # Start all requests
@@ -209,11 +211,11 @@ for client in clients:
 
 ```python
 import select
-from uhttp_server import HttpServer
-from uhttp_client import HttpClient
+import uhttp.server
+import uhttp.client
 
-server = HttpServer(port=8080)
-backend = HttpClient('http://api.example.com')
+server = uhttp.server.HttpServer(port=8080)
+backend = uhttp.client.HttpClient('http://api.example.com')
 
 while True:
     r, w, _ = select.select(
@@ -238,42 +240,44 @@ while True:
 
 ### Function `parse_url`
 
-**`parse_url(url)`**
+**`uhttp.client.parse_url(url)`**
 
 Parse URL into components. Returns `(host, port, path, ssl, auth)` tuple.
 
 ```python
-from uhttp_client import parse_url
+import uhttp.client
 
-parse_url('https://api.example.com/v1/users')
+uhttp.client.parse_url('https://api.example.com/v1/users')
 # → ('api.example.com', 443, '/v1/users', True, None)
 
-parse_url('http://localhost:8080/api')
+uhttp.client.parse_url('http://localhost:8080/api')
 # → ('localhost', 8080, '/api', False, None)
 
-parse_url('https://user:pass@api.example.com')
+uhttp.client.parse_url('https://user:pass@api.example.com')
 # → ('api.example.com', 443, '', True, ('user', 'pass'))
 
-parse_url('example.com')
+uhttp.client.parse_url('example.com')
 # → ('example.com', 80, '', False, None)
 ```
 
 
 ### Class `HttpClient`
 
-**`HttpClient(url_or_host, port=None, ssl_context=None, auth=None, connect_timeout=10, timeout=30, max_response_length=1MB)`**
+**`uhttp.client.HttpClient(url_or_host, port=None, ssl_context=None, auth=None, connect_timeout=10, timeout=30, max_response_length=1MB)`**
 
 Can be initialized with URL or host/port:
 
 ```python
+import uhttp.client
+
 # URL-based (recommended)
-HttpClient('https://api.example.com/v1')
+uhttp.client.HttpClient('https://api.example.com/v1')
 
 # With auth in URL
-HttpClient('https://user:pass@api.example.com/v1')
+uhttp.client.HttpClient('https://user:pass@api.example.com/v1')
 
 # Traditional
-HttpClient('api.example.com', port=443, ssl_context=ctx)
+uhttp.client.HttpClient('api.example.com', port=443, ssl_context=ctx)
 ```
 
 Parameters:
@@ -369,19 +373,21 @@ Parse response body as JSON. Lazy evaluation, cached.
 HTTP Basic authentication via URL or `auth` parameter:
 
 ```python
+import uhttp.client
+
 # Via URL
-client = HttpClient('https://user:password@api.example.com')
+client = uhttp.client.HttpClient('https://user:password@api.example.com')
 response = client.get('/protected').wait()
 
 # Via parameter
-client = HttpClient('https://api.example.com', auth=('user', 'password'))
+client = uhttp.client.HttpClient('https://api.example.com', auth=('user', 'password'))
 response = client.get('/protected').wait()
 
 # Change auth at runtime
 client.auth = ('new_user', 'new_password')
 
 # Per-request auth (overrides client's default)
-client = HttpClient('https://api.example.com')
+client = uhttp.client.HttpClient('https://api.example.com')
 response = client.get('/admin', auth=('admin', 'secret')).wait()
 response = client.get('/public').wait()  # no auth
 ```
@@ -392,8 +398,10 @@ HTTP Digest authentication is handled automatically. On 401 response with
 `WWW-Authenticate: Digest` header, the client retries with digest credentials:
 
 ```python
+import uhttp.client
+
 # Same API as Basic auth - digest is automatic
-client = HttpClient('https://api.example.com', auth=('user', 'password'))
+client = uhttp.client.HttpClient('https://api.example.com', auth=('user', 'password'))
 
 # First request gets 401, client automatically retries with digest auth
 response = client.get('/protected').wait()
@@ -413,7 +421,9 @@ Cookies are automatically:
 - Sent with subsequent requests
 
 ```python
-client = HttpClient('https://example.com')
+import uhttp.client
+
+client = uhttp.client.HttpClient('https://example.com')
 
 # Login - server sets session cookie
 client.post('/login', json={'user': 'admin', 'pass': 'secret'}).wait()
@@ -433,7 +443,9 @@ client.close()
 Connections are reused automatically (HTTP/1.1 keep-alive).
 
 ```python
-client = HttpClient('https://httpbin.org')
+import uhttp.client
+
+client = uhttp.client.HttpClient('https://httpbin.org')
 
 # All requests use the same connection
 for i in range(10):
@@ -454,8 +466,10 @@ Total time allowed for the request. Set via `timeout` parameter on client or per
 When expired, raises `HttpTimeoutError` and closes connection.
 
 ```python
+import uhttp.client
+
 # Client-level timeout (default for all requests)
-client = HttpClient('https://example.com', timeout=30)
+client = uhttp.client.HttpClient('https://example.com', timeout=30)
 
 # Per-request timeout (overrides client default)
 response = client.get('/slow', timeout=60).wait()
@@ -467,7 +481,9 @@ Time to spend in `wait()` call. When expired, returns `None` but keeps connectio
 Useful for polling or interleaving with other work.
 
 ```python
-client = HttpClient('https://example.com', timeout=60)  # request timeout
+import uhttp.client
+
+client = uhttp.client.HttpClient('https://example.com', timeout=60)  # request timeout
 client.get('/slow')
 
 # Try for 5 seconds, then do something else
@@ -482,25 +498,19 @@ if response is None:
 ## Error handling
 
 ```python
-from uhttp_client import (
-    HttpClient,
-    HttpClientError,
-    HttpConnectionError,
-    HttpTimeoutError,
-    HttpResponseError
-)
+import uhttp.client
 
-client = HttpClient('https://example.com')
+client = uhttp.client.HttpClient('https://example.com')
 
 try:
     response = client.get('/api').wait()
-except HttpConnectionError as e:
+except uhttp.client.HttpConnectionError as e:
     print(f"Connection failed: {e}")
-except HttpTimeoutError as e:
+except uhttp.client.HttpTimeoutError as e:
     print(f"Timeout: {e}")
-except HttpResponseError as e:
+except uhttp.client.HttpResponseError as e:
     print(f"Invalid response: {e}")
-except HttpClientError as e:
+except uhttp.client.HttpClientError as e:
     print(f"Client error: {e}")
 finally:
     client.close()
@@ -533,44 +543,40 @@ PYTHONPATH=. python examples/client_basic.py
 
 ## CLI Tool
 
-Simple curl-like CLI tool using uhttp_client:
+Simple curl-like CLI tool using uhttp.client:
 
 ```bash
 # GET request
-PYTHONPATH=. python tools/httpcl.py http://httpbin.org/get
+python -m tools.httpcl http://httpbin.org/get
 
 # POST with JSON
-PYTHONPATH=. python tools/httpcl.py http://httpbin.org/post -j '{"key": "value"}'
+python -m tools.httpcl http://httpbin.org/post -j '{"key": "value"}'
 
 # Verbose mode
-PYTHONPATH=. python tools/httpcl.py -v https://httpbin.org/get
+python -m tools.httpcl -v https://httpbin.org/get
 
 # Save to file
-PYTHONPATH=. python tools/httpcl.py https://httpbin.org/image/png -o image.png
+python -m tools.httpcl https://httpbin.org/image/png -o image.png
 ```
 
-See `tools/httpcl.py --help` for all options.
+See `python -m tools.httpcl --help` for all options.
 
 
-## Known Limitations
+## IPv6 Support
 
-### IPv6 Not Supported
-
-Client currently supports only IPv4:
-- Uses `getaddrinfo()` which may return IPv6 addresses first on some systems (Linux)
-- When server listens only on IPv4, connection to `localhost` may fail on Linux
-
-**Workaround:** Use explicit IPv4 addresses:
+Client supports both IPv4 and IPv6:
+- Automatically tries all addresses returned by `getaddrinfo()` (IPv4 and IPv6)
+- Works with hostnames like `localhost` on all systems
 
 ```python
-# May fail on Linux (localhost can resolve to ::1)
-client = HttpClient('http://localhost:8080')
+import uhttp.client
 
-# Always works
-client = HttpClient('http://127.0.0.1:8080')
+# Works on all systems (IPv4 or IPv6)
+client = uhttp.client.HttpClient('http://localhost:8080')
+
+# Explicit IPv4
+client = uhttp.client.HttpClient('http://127.0.0.1:8080')
+
+# Explicit IPv6
+client = uhttp.client.HttpClient('http://[::1]:8080')
 ```
-
-
-## TODO
-
-- IPv6 support (requires MicroPython testing)

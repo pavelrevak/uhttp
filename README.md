@@ -1,4 +1,4 @@
-# uHTTP: micro HTTP server
+# uHTTP: micro HTTP server and client
 
 
 ## Features:
@@ -9,8 +9,18 @@
 - support delayed response, user can hold client instance and reply later
 - support for raw data (HTML, binary, ...) and also for JSON (send and receive)
 - SSL/TLS support for HTTPS connections (compatible with both CPython and MicroPython)
+- IPv6 and dual-stack (IPv4+IPv6) support
 - need at least 32KB RAM to work (depends on configured limits)
 - do many check for bad requests and or headers, and many errors will not break this
+
+
+## Installation
+
+```bash
+pip install micro-uhttp
+```
+
+Or copy the `uhttp/` directory to your project.
 
 
 ## Testing
@@ -32,12 +42,12 @@ python -m unittest discover -s tests -v
 See [tests/README.md](tests/README.md) for detailed test documentation.
 
 
-## usage
+## Usage
 
 ```python
-import uhttp_server
+import uhttp.server
 
-server = uhttp_server.HttpServer(port=9980)
+server = uhttp.server.HttpServer(port=9980)
 
 while True:
     client = server.wait()
@@ -50,7 +60,6 @@ while True:
             client.respond({'message': 'hello', 'success': True, 'headers': client.headers, 'query': client.query})
         else:
             client.respond("Not found", status=404)
-
 ```
 
 
@@ -62,14 +71,14 @@ uHTTP supports SSL/TLS encryption for HTTPS connections on both CPython and Micr
 
 ```python
 import ssl
-import uhttp_server
+import uhttp.server
 
 # Create SSL context
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(certfile='cert.pem', keyfile='key.pem')
 
 # Create HTTPS server
-server = uhttp_server.HttpServer(port=443, ssl_context=context)
+server = uhttp.server.HttpServer(port=443, ssl_context=context)
 
 while True:
     client = server.wait()
@@ -96,7 +105,7 @@ while True:
 
 ```python
 import ssl
-import uhttp_server
+import uhttp.server
 
 # Create SSL context with Let's Encrypt certificates
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -106,7 +115,7 @@ context.load_cert_chain(
 )
 
 # Create HTTPS server
-server = uhttp_server.HttpServer(
+server = uhttp.server.HttpServer(
     address='0.0.0.0',
     port=443,
     ssl_context=context
@@ -163,7 +172,7 @@ Run both HTTP and HTTPS servers to redirect HTTP traffic:
 ```python
 import ssl
 import select
-import uhttp_server
+import uhttp.server
 
 # SSL context for HTTPS
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -173,10 +182,10 @@ context.load_cert_chain(
 )
 
 # HTTP server (redirects)
-http_server = uhttp_server.HttpServer(port=80)
+http_server = uhttp.server.HttpServer(port=80)
 
 # HTTPS server (serves content)
-https_server = uhttp_server.HttpServer(port=443, ssl_context=context)
+https_server = uhttp.server.HttpServer(port=443, ssl_context=context)
 
 while True:
     r, w, _ = select.select(
@@ -222,29 +231,29 @@ See [examples/](examples/) directory for complete working examples.
 
 ### General methods:
 
-**`import uhttp_server`**
+**`import uhttp.server`**
 
-**`uhttp_server.decode_percent_encoding(data)`**
+**`uhttp.server.decode_percent_encoding(data)`**
 
 - Decode percent encoded data (bytes)
 
-**`uhttp_server.parse_header_parameters(value)`**
+**`uhttp.server.parse_header_parameters(value)`**
 
 - Parse parameters/directives from header value, returns dict
 
-**`uhttp_server.parse_query(raw_query, query=None)`**
+**`uhttp.server.parse_query(raw_query, query=None)`**
 
 - Parse raw_query from URL, append it to existing query, returns dict
 
-**`uhttp_server.parse_url(url)`**
+**`uhttp.server.parse_url(url)`**
 
 - Parse URL to path and query
 
-**`uhttp_server.parse_header_line(line)`**
+**`uhttp.server.parse_header_line(line)`**
 
 - Parse header line to key and value
 
-**`uhttp_server.encode_response_data(headers, data)`**
+**`uhttp.server.encode_response_data(headers, data)`**
 
 - Encode response data by its type
 
@@ -402,27 +411,26 @@ Parameters:
 - Finish multipart stream
 
 
-## Known Limitations
+## IPv6 Support
 
-### IPv6 Not Supported
-
-Server currently supports only IPv4:
-- Creates IPv4 socket (`AF_INET`) and binds to `0.0.0.0` by default
-- To listen on specific interface, use explicit IPv4 address
+Server supports both IPv4 and IPv6:
 
 ```python
-# Works
-server = HttpServer(address='0.0.0.0', port=80)      # all IPv4 interfaces
-server = HttpServer(address='192.168.1.100', port=80) # specific IPv4
+import uhttp.server
 
-# Does NOT work
-server = HttpServer(address='::', port=80)           # IPv6 not supported
+# IPv4 only (default)
+server = uhttp.server.HttpServer(address='0.0.0.0', port=80)
+
+# Dual-stack (IPv4 + IPv6)
+server = uhttp.server.HttpServer(address='::', port=80)
+
+# IPv6 only
+server = uhttp.server.HttpServer(address='::1', port=80)
 ```
 
 
 ## TODO
 
-- IPv6 support (requires MicroPython testing)
 - Cookie attributes support (Path, Domain, Secure, HttpOnly, SameSite, Expires)
 - Expect: 100-continue support - currently causes deadlock (client waits for 100, server waits for body)
 - Streaming API for large data (receiving and sending):

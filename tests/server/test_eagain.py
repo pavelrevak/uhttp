@@ -7,7 +7,7 @@ import socket
 import errno
 import time
 import select
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 class TestEAGAIN(unittest.TestCase):

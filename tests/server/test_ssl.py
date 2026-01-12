@@ -10,7 +10,7 @@ import threading
 import json
 import subprocess
 import os
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 def ensure_test_certificates():

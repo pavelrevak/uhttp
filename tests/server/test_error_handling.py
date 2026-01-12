@@ -6,7 +6,7 @@ import unittest
 import socket
 import time
 import threading
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 class TestErrorHandling(unittest.TestCase):

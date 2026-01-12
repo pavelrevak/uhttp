@@ -8,7 +8,7 @@ import time
 import threading
 import tempfile
 import os
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 class TestRespondFile(unittest.TestCase):

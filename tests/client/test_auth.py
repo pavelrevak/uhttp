@@ -7,8 +7,8 @@ import threading
 import time
 import hashlib
 import base64
-import uhttp_server
-import uhttp_client
+from uhttp import server as uhttp_server
+from uhttp import client as uhttp_client
 
 
 class TestClientBasicAuth(unittest.TestCase):

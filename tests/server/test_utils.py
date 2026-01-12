@@ -1,5 +1,5 @@
 import unittest
-import uhttp_server
+from uhttp import server as uhttp_server
 
 
 class TestDecodePercentEncoding(unittest.TestCase):
