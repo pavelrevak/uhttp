@@ -960,9 +960,13 @@ class HttpServer():
         connection = HttpConnection(self, cl_socket, addr, **self._kwargs)
         while len(self._waiting_connections) > self._max_clients:
             connection_to_remove = self._waiting_connections.pop(0)
-            connection_to_remove.respond(
-                'Request Timeout, too many requests', status=408,
-                headers={CONNECTION: CONNECTION_CLOSE})
+            if connection_to_remove._response_started:
+                # Already responding (e.g., multipart stream) - just close
+                connection_to_remove.close()
+            else:
+                connection_to_remove.respond(
+                    'Request Timeout, too many requests', status=408,
+                    headers={CONNECTION: CONNECTION_CLOSE})
         self._waiting_connections.append(connection)
 
     def event_read(self, sockets):
