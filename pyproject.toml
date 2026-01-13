@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "micro-uhttp"
-version = "2.0.0"
+version = "2.0.1"
 description = "Micro HTTP server and client for Python and MicroPython"
 readme = "README.md"
 authors = [
