@@ -136,7 +136,7 @@ def decode_percent_encoding(data):
         b = data[i]
         if b == 37 and i + 2 < n:  # '%'
             try:
-                res.append(int(data[i+1:i+3], 16))
+                res.append(int(bytes(data[i+1:i+3]), 16))
                 i += 3
                 continue
             except ValueError:
@@ -186,7 +186,7 @@ def parse_query(raw_query, query=None):
                     val = None
             except (UnicodeError, ValueError) as err:
                 raise HttpErrorWithResponse(
-                    400, "Bad query coding") from err
+                    400, "Invalid query string encoding") from err
             if key not in query:
                 query[key] = val
             elif isinstance(query[key], list):
@@ -208,7 +208,7 @@ def parse_url(url):
         path = decode_percent_encoding(path).decode('utf-8')
     except (UnicodeError, ValueError) as err:
         raise HttpErrorWithResponse(
-            400, "Wrong header path coding") from err
+            400, "Invalid URL path encoding") from err
     return path, query
 
 
@@ -217,8 +217,9 @@ def parse_header_line(line):
     try:
         line = line.decode('ascii')
     except ValueError as err:
+        readable = line.decode('utf-8', errors='replace')
         raise HttpErrorWithResponse(
-            400, f"Wrong header line encoding: {line}") from err
+            400, f"Invalid non-ASCII characters in header: {readable}") from err
     if ':' not in line:
         raise HttpErrorWithResponse(400, f"Wrong header format {line}")
     key, val = line.split(':', 1)
@@ -239,7 +240,7 @@ def encode_response_data(headers, data):
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_OCTET_STREAM
     else:
-        raise HttpErrorWithResponse(415, str(type(data)))
+        raise HttpErrorWithResponse(415, f"Unsupported data type: {type(data).__name__}")
     headers[CONTENT_LENGTH] = len(data)
     return data
 
@@ -466,15 +467,17 @@ class HttpConnection():
 
     def _parse_http_request(self, line):
         if line.count(b' ') != 2:
-            raise HttpError(f"Bad request: {line}")
+            readable = line.decode('utf-8', errors='replace')
+            raise HttpError(f"Malformed request line: {readable}")
         method, url, protocol = line.strip().split(b' ')
         try:
             self._method = method.decode('ascii')
             self._url = url.decode('ascii')
             self._protocol = protocol.decode('ascii')
         except ValueError as err:
+            readable = line.decode('utf-8', errors='replace')
             raise HttpErrorWithResponse(
-                400, f"Bad request: {line} ({err})") from err
+                400, f"Invalid characters in request line: {readable}") from err
         if self._method not in METHODS:
             raise HttpErrorWithResponse(501)
         if self._protocol not in PROTOCOLS:
@@ -496,7 +499,7 @@ class HttpConnection():
                 self._data = _json.loads(self._buffer)
             except ValueError as err:
                 raise HttpErrorWithResponse(
-                    400, f"ERROR: Json decode: {err}") from err
+                    400, f"JSON decode error: {err}") from err
         else:
             self._data = self._buffer
         self._buffer = bytearray()
@@ -535,7 +538,7 @@ class HttpConnection():
         if len(self._buffer) >= self._max_headers_length:
             raise HttpErrorWithResponse(
                 431,
-                f"({len(self._buffer)} > {self._max_headers_length} Bytes)")
+                f"Headers too large: {len(self._buffer)} bytes (max {self._max_headers_length})")
 
     def _send(self, data):
         """Add data to send buffer for async sending"""

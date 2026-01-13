@@ -66,9 +66,10 @@ def _parse_header_line(line):
     try:
         line = line.decode('ascii')
     except ValueError as err:
-        raise HttpResponseError(f"Wrong header line encoding: {line}") from err
+        readable = line.decode('utf-8', errors='replace')
+        raise HttpResponseError(f"Invalid non-ASCII characters in header: {readable}") from err
     if ':' not in line:
-        raise HttpResponseError(f"Wrong header format: {line}")
+        raise HttpResponseError(f"Invalid header format: {line}")
     key, val = line.split(':', 1)
     return key.strip().lower(), val.strip()
 
@@ -143,7 +144,7 @@ def _encode_request_data(data, headers):
         if CONTENT_TYPE not in headers:
             headers[CONTENT_TYPE] = CONTENT_TYPE_OCTET_STREAM
     else:
-        raise HttpClientError(f"Unsupported data type: {type(data)}")
+        raise HttpClientError(f"Unsupported data type: {type(data).__name__}")
     return bytes(data)
 
 
