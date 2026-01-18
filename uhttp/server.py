@@ -57,6 +57,13 @@ METHODS = (
     'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST',
     'PUT', 'TRACE')
 PROTOCOLS = ('HTTP/1.0', 'HTTP/1.1')
+
+# Event mode constants
+EVENT_REQUEST = 0   # Complete request (headers + body)
+EVENT_HEADERS = 1   # Headers received, waiting for accept_body()
+EVENT_DATA = 2      # Data available in buffer, call read_buffer()
+EVENT_COMPLETE = 3  # Body fully received
+EVENT_ERROR = 4     # Error occurred (timeout, disconnect)
 STATUS_CODES = {
     100: "Continue",
     200: "OK",
@@ -273,6 +280,17 @@ class HttpConnection():
         self._file_handle = None
         self._last_activity = _time.time()
         self._requests_count = 0
+        # Event mode attributes
+        self.context = None
+        self._event = None
+        self._bytes_received = 0
+        self._error = None
+        self._streaming_body = False
+        self._streaming_events = False
+        self._body_complete = False
+        self._body_file_handle = None
+        self._to_file = None
+        # Config from kwargs
         self._max_headers_length = kwargs.get(
             'max_headers_length', MAX_HEADERS_LENGTH)
         self._max_content_length = kwargs.get(
@@ -417,6 +435,21 @@ class HttpConnection():
     def send_buffer_size(self):
         """Size of pending send buffer in bytes"""
         return len(self._send_buffer)
+
+    @property
+    def event(self):
+        """Current event type (EVENT_REQUEST, EVENT_HEADERS, etc.)"""
+        return self._event
+
+    @property
+    def bytes_received(self):
+        """Number of body bytes received so far"""
+        return self._bytes_received
+
+    @property
+    def error(self):
+        """Error message if event is EVENT_ERROR"""
+        return self._error
 
     @property
     def content_type(self):
@@ -652,6 +685,7 @@ class HttpConnection():
     def reset(self):
         """Reset connection for next request (keep-alive)"""
         self._close_file_handle()
+        self._close_body_file()
         self._method = None
         self._url = None
         self._protocol = None
@@ -664,11 +698,21 @@ class HttpConnection():
         self._is_multipart = False
         self._response_started = False
         self._response_keep_alive = False
+        # Reset event mode attributes
+        self.context = None
+        self._event = None
+        self._bytes_received = 0
+        self._error = None
+        self._streaming_body = False
+        self._streaming_events = False
+        self._body_complete = False
+        self._to_file = None
         self.update_activity()
 
     def close(self):
         """Close connection"""
         self._close_file_handle()
+        self._close_body_file(delete=True)
         self._server.remove_connection(self)
         if self._socket:
             try:
@@ -704,6 +748,108 @@ class HttpConnection():
         except ClientError:
             self.close()
         return None
+
+    def process_request_event(self):
+        """Process HTTP request in event mode.
+
+        Returns True if event is ready, False if waiting, None on error.
+        """
+        if self._socket is None:
+            return None
+        if self._is_multipart:
+            return False
+
+        try:
+            return self._process_event()
+        except HttpErrorWithResponse as err:
+            self._error = str(err)
+            self._event = EVENT_ERROR
+            return True
+        except ClientError as err:
+            # Client disconnect on keep-alive while waiting for next request
+            # is normal - just close silently
+            if self._requests_count > 0 and self._method is None:
+                self.close()
+                return None
+            self._error = str(err)
+            self._event = EVENT_ERROR
+            return True
+
+    def _process_event(self):
+        """Internal event processing logic"""
+        # Phase 1: Reading headers
+        if self._method is None:
+            self._read_headers()
+            if self._method is None:
+                return False  # Headers not complete yet
+            return self._handle_headers_complete()
+
+        # Phase 2: Streaming body
+        if self._streaming_body:
+            return self._handle_streaming_body()
+
+        # Phase 3: Waiting for accept_body() call
+        return False
+
+    def _handle_headers_complete(self):
+        """Handle completed headers, decide event type"""
+        if not self.content_length:
+            # No body - complete request
+            self._event = EVENT_REQUEST
+            self._requests_count += 1
+            return True
+
+        # Check if small body already arrived with headers
+        # _data may be set by _process_headers() or buffer may have the data
+        if self._data is not None or len(self._buffer) >= self.content_length:
+            if self._data is None:
+                self._process_data()
+            self._event = EVENT_REQUEST
+            self._requests_count += 1
+            return True
+
+        # Body expected but not complete - notify headers ready
+        self._event = EVENT_HEADERS
+        return True
+
+    def _handle_streaming_body(self):
+        """Handle streaming body data"""
+        self._recv_to_buffer(self._max_content_length)
+
+        if not self._buffer:
+            return False  # No new data
+
+        # Write to file if in file mode
+        if self._body_file_handle:
+            self._write_buffer_to_file()
+            if self._event == EVENT_ERROR:
+                return True
+
+        # Check if body is complete
+        total = self._bytes_received + len(self._buffer)
+        if self.content_length and total >= self.content_length:
+            self._body_complete = True
+            self._event = EVENT_COMPLETE
+            self._requests_count += 1
+            return True
+
+        # If not streaming events, keep buffering until complete
+        if not self._streaming_events:
+            return False
+
+        self._event = EVENT_DATA
+        return True
+
+    def _write_buffer_to_file(self):
+        """Write buffer to body file handle"""
+        try:
+            self._body_file_handle.write(self._buffer)
+            self._bytes_received += len(self._buffer)
+            self._buffer = bytearray()
+        except OSError as err:
+            self._close_body_file(delete=True)
+            self._error = f"Failed to write file: {err}"
+            self._event = EVENT_ERROR
 
     def _build_response_header(self, status=200, headers=None, cookies=None):
         """Build HTTP response header string
@@ -744,6 +890,65 @@ class HttpConnection():
             self._response_keep_alive = keep_alive
 
         return headers
+
+    def accept_body(self, streaming=False, to_file=None):
+        """Accept incoming body data in event mode.
+
+        Must be called after receiving EVENT_HEADERS to start receiving body.
+
+        Args:
+            streaming: If True, receive EVENT_DATA for each chunk.
+                If False (default), buffer all data and receive only EVENT_COMPLETE.
+            to_file: Path to file where body will be saved. Server handles
+                the upload and sends EVENT_COMPLETE when done.
+
+        Returns:
+            int: Number of bytes already waiting in buffer.
+        """
+        if self._event != EVENT_HEADERS:
+            raise HttpError("accept_body() can only be called after EVENT_HEADERS")
+
+        self._streaming_body = True
+        self._streaming_events = streaming
+        self._to_file = to_file
+
+        if to_file:
+            try:
+                self._body_file_handle = open(to_file, 'wb')
+            except OSError as err:
+                self._error = f"Failed to open file: {err}"
+                self._event = EVENT_ERROR
+                return 0
+
+        # Return count of bytes already in buffer
+        return len(self._buffer)
+
+    def read_buffer(self):
+        """Read available data from buffer.
+
+        Returns:
+            bytes or None: Data from buffer, or None if no data available.
+        """
+        if not self._buffer:
+            return None
+        chunk = bytes(self._buffer)
+        self._bytes_received += len(chunk)
+        self._buffer = bytearray()
+        return chunk
+
+    def _close_body_file(self, delete=False):
+        """Close body file handle safely"""
+        if hasattr(self, '_body_file_handle') and self._body_file_handle:
+            try:
+                self._body_file_handle.close()
+            except OSError:
+                pass
+            self._body_file_handle = None
+            if delete and hasattr(self, '_to_file') and self._to_file:
+                try:
+                    _os.remove(self._to_file)
+                except OSError:
+                    pass
 
     def respond(self, data=None, status=200, headers=None, cookies=None):
         """Create general respond with data, status and headers as dict
@@ -865,13 +1070,21 @@ class HttpConnection():
 class HttpServer():
     """HTTP server"""
 
-    def __init__(self, address='0.0.0.0', port=80, ssl_context=None, **kwargs):
+    def __init__(
+            self, address='0.0.0.0', port=80, ssl_context=None,
+            event_mode=False, **kwargs):
         """IP address and port of listening interface for HTTP
 
         For IPv6 dual-stack (accepts both IPv4 and IPv6), use address='::'
+
+        Args:
+            event_mode: If True, enables streaming event mode where wait()
+                returns clients at different stages (headers, data, complete).
+                If False (default), wait() only returns fully loaded requests.
         """
         self._kwargs = kwargs
         self._ssl_context = ssl_context
+        self._event_mode = event_mode
         if ':' in address:
             self._socket = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
             try:
@@ -897,6 +1110,11 @@ class HttpServer():
     def is_secure(self):
         """Return True if server uses SSL/TLS"""
         return bool(self._ssl_context)
+
+    @property
+    def event_mode(self):
+        """Return True if event mode is enabled"""
+        return self._event_mode
 
     @property
     def read_sockets(self):
@@ -982,13 +1200,26 @@ class HttpServer():
         else:
             for connection in list(self._waiting_connections):
                 if connection.socket in sockets:
-                    if connection.process_request():
+                    if self._event_mode:
+                        if connection.process_request_event():
+                            result = connection
+                            break
+                    elif connection.process_request():
                         result = connection
                         break
 
         self._cleanup_idle_connections()
 
         return result
+
+    def _get_pending_connection(self):
+        """Get connection with pending data in buffer (event mode only)"""
+        if not self._event_mode:
+            return None
+        for connection in self._waiting_connections:
+            if connection._streaming_body and connection._buffer:
+                return connection
+        return None
 
     def event_write(self, sockets):
         """Process sockets with write_event, send buffered data"""
@@ -1011,6 +1242,12 @@ class HttpServer():
 
             client = server1.process_events(r, w) or server2.process_events(r, w)
         """
+        # Check pending connections first (event mode)
+        pending = self._get_pending_connection()
+        if pending:
+            if pending._handle_streaming_body():
+                return pending
+
         if write_sockets:
             self.event_write(write_sockets)
         if read_sockets:
@@ -1020,6 +1257,12 @@ class HttpServer():
     def wait(self, timeout=1):
         """Wait for new clients with specified timeout,
         returns None or instance of HttpConnection with established connection"""
+        # Check pending connections first (event mode)
+        pending = self._get_pending_connection()
+        if pending:
+            if pending._handle_streaming_body():
+                return pending
+
         self.event_write(self.write_sockets)
         read_sockets, write_sockets, _ = _select.select(
             self.read_sockets, self.write_sockets, [], timeout)

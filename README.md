@@ -10,6 +10,7 @@
 - support for raw data (HTML, binary, ...) and also for JSON (send and receive)
 - SSL/TLS support for HTTPS connections (compatible with both CPython and MicroPython)
 - IPv6 and dual-stack (IPv4+IPv6) support
+- event mode for streaming large uploads without buffering entire body in memory
 - need at least 32KB RAM to work (depends on configured limits)
 - do many check for bad requests and or headers, and many errors will not break this
 
@@ -27,7 +28,7 @@ For MicroPython, copy `uhttp/server.py` and/or `uhttp/client.py` to your device.
 
 ## Testing
 
-Comprehensive test suite with 130 tests covering all major functionality.
+Comprehensive test suite with 265 tests covering all major functionality.
 
 Run all tests from the project root:
 
@@ -262,18 +263,19 @@ See [examples/](examples/) directory for complete working examples.
 
 ### Class `HttpServer`:
 
-**`HttpServer(address='0.0.0.0', port=80, ssl_context=None, **kwargs)`**
+**`HttpServer(address='0.0.0.0', port=80, ssl_context=None, event_mode=False, **kwargs)`**
 
 Parameters:
 - `address` - IP address to bind to (default: '0.0.0.0')
 - `port` - Port to listen on (default: 80)
 - `ssl_context` - Optional `ssl.SSLContext` for HTTPS connections (default: None)
+- `event_mode` - Enable event mode for streaming uploads (default: False)
 - `**kwargs` - Additional options:
   - `max_waiting_clients` - Maximum concurrent connections (default: 5)
   - `keep_alive_timeout` - Keep-alive timeout in seconds (default: 30)
   - `keep_alive_max_requests` - Max requests per connection (default: 100)
   - `max_headers_length` - Maximum header size in bytes (default: 4KB)
-  - `max_content_length` - Maximum body size in bytes (default: 512KB)
+  - `max_content_length` - Maximum body size in bytes (default: 512KB, only enforced when event_mode=False)
 
 #### Properties:
 
@@ -292,6 +294,10 @@ Parameters:
 **`is_secure(self)`**
 
 - Returns `True` if server uses SSL/TLS, `False` otherwise
+
+**`event_mode(self)`**
+
+- Returns `True` if event mode is enabled
 
 #### Methods:
 
@@ -378,6 +384,22 @@ Parameters:
 
 - Content length
 
+**`event(self)`** (event mode only)
+
+- Current event type: `EVENT_REQUEST`, `EVENT_HEADERS`, `EVENT_DATA`, `EVENT_COMPLETE`, or `EVENT_ERROR`
+
+**`bytes_received(self)`** (event mode only)
+
+- Number of body bytes received so far
+
+**`error(self)`** (event mode only)
+
+- Error message when event is `EVENT_ERROR`
+
+**`context`** (event mode only)
+
+- Application storage attribute for request state (read-write)
+
 #### Methods:
 
 **`headers_get(self, key, default=None)`**
@@ -412,6 +434,79 @@ Parameters:
 
 - Finish multipart stream
 
+**`accept_body(self, streaming=False, to_file=None)`** (event mode only)
+
+- Accept body after `EVENT_HEADERS`. Call this to start receiving body data.
+- `streaming=False` (default) - Buffer all data, receive only `EVENT_COMPLETE`
+- `streaming=True` - Receive `EVENT_DATA` for each chunk, read with `read_buffer()`
+- `to_file="/path"` - Save body directly to file
+- Returns: Number of bytes already waiting in buffer
+
+**`read_buffer(self)`** (event mode only)
+
+- Read available data from buffer
+- Returns: bytes or None if no data available
+
+
+## Event Mode
+
+Event mode enables streaming large uploads without buffering entire body in memory.
+
+```python
+from uhttp.server import (
+    HttpServer, EVENT_REQUEST, EVENT_HEADERS,
+    EVENT_DATA, EVENT_COMPLETE, EVENT_ERROR
+)
+
+server = HttpServer(port=8080, event_mode=True)
+
+while True:
+    client = server.wait()
+    if not client:
+        continue
+
+    if client.event == EVENT_REQUEST:
+        # Small request or GET - handle normally
+        client.respond({'status': 'ok'})
+
+    elif client.event == EVENT_HEADERS:
+        # Large upload starting - decide how to handle
+        client.context = {'total': 0}
+        client.accept_body()
+        # Read any data that arrived with headers
+        data = client.read_buffer()
+        if data:
+            client.context['total'] += len(data)
+
+    elif client.event == EVENT_DATA:
+        # More data arrived
+        data = client.read_buffer()
+        if data:
+            client.context['total'] += len(data)
+
+    elif client.event == EVENT_COMPLETE:
+        # Upload finished
+        data = client.read_buffer()
+        if data:
+            client.context['total'] += len(data)
+        client.respond({'received': client.context['total']})
+
+    elif client.event == EVENT_ERROR:
+        print(f"Error: {client.error}")
+```
+
+For file uploads, use `to_file` parameter:
+
+```python
+elif client.event == EVENT_HEADERS:
+    client.accept_body(to_file=f"/uploads/{uuid}.bin")
+
+elif client.event == EVENT_COMPLETE:
+    client.respond({'status': 'uploaded'})
+```
+
+**Note:** Small POST requests where headers and body arrive in the same TCP packet will receive `EVENT_REQUEST` (not `EVENT_HEADERS`), since the complete request is already available.
+
 
 ## IPv6 Support
 
@@ -435,9 +530,5 @@ server = uhttp.server.HttpServer(address='::1', port=80)
 
 - Cookie attributes support (Path, Domain, Secure, HttpOnly, SameSite, Expires)
 - Expect: 100-continue support - currently causes deadlock (client waits for 100, server waits for body)
-- Streaming API for large data (receiving and sending):
-  - Separate HttpConnection (HTTP protocol) from DataStream (data transfer)
-  - wait() returns after headers, body is read via read()/read_all()
-  - Chunked transfer encoding support (receiving and sending)
-  - API options: events, callbacks, or extended HttpConnection object
-  - Handle EAGAIN when sending large responses
+- Streaming API for sending large responses (handle EAGAIN)
+- Chunked transfer encoding support (receiving and sending)
