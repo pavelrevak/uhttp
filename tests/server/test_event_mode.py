@@ -29,8 +29,11 @@ class TestEventModeBasic(unittest.TestCase):
 
         def run_server():
             try:
-                while cls.server:
-                    client = cls.server.wait(timeout=0.5)
+                while True:
+                    server = cls.server
+                    if server is None:
+                        break
+                    client = server.wait(timeout=0.5)
                     if client:
                         cls.events_received.append({
                             'event': client.event,
@@ -213,14 +216,17 @@ class TestEventModeStreaming(unittest.TestCase):
 
         def run_server():
             try:
-                while cls.server:
-                    client = cls.server.wait(timeout=0.5)
+                while True:
+                    server = cls.server
+                    if server is None:
+                        break
+                    client = server.wait(timeout=0.5)
                     if client:
                         if client.event == EVENT_REQUEST:
                             client.respond({'status': 'ok'})
                         elif client.event == EVENT_HEADERS:
                             client.context = {'total': 0}
-                            pending = client.accept_body(streaming=True)
+                            pending = client.accept_body_streaming()
                             cls.received_data.append(
                                 ('headers', client.path, pending))
                             data = client.read_buffer()
@@ -329,8 +335,11 @@ class TestEventModeFileUpload(unittest.TestCase):
 
         def run_server():
             try:
-                while cls.server:
-                    client = cls.server.wait(timeout=0.5)
+                while True:
+                    server = cls.server
+                    if server is None:
+                        break
+                    client = server.wait(timeout=0.5)
                     if client:
                         if client.event == EVENT_REQUEST:
                             client.respond({'status': 'ok'})
@@ -338,7 +347,7 @@ class TestEventModeFileUpload(unittest.TestCase):
                             # Create temp file for upload
                             fd, cls.upload_path = tempfile.mkstemp()
                             os.close(fd)
-                            client.accept_body(to_file=cls.upload_path)
+                            client.accept_body_to_file(cls.upload_path)
                         elif client.event == EVENT_DATA:
                             pass  # File mode handles data internally
                         elif client.event == EVENT_COMPLETE:
@@ -435,8 +444,11 @@ class TestEventModeBackwardsCompatibility(unittest.TestCase):
 
         def run_server():
             try:
-                while cls.server:
-                    client = cls.server.wait(timeout=0.5)
+                while True:
+                    server = cls.server
+                    if server is None:
+                        break
+                    client = server.wait(timeout=0.5)
                     if client:
                         # In non-event mode, event should be None
                         client.respond({
@@ -530,8 +542,11 @@ class TestEventModeContext(unittest.TestCase):
 
         def run_server():
             try:
-                while cls.server:
-                    client = cls.server.wait(timeout=0.5)
+                while True:
+                    server = cls.server
+                    if server is None:
+                        break
+                    client = server.wait(timeout=0.5)
                     if client:
                         if client.event == EVENT_REQUEST:
                             # Test setting and reading context

@@ -41,6 +41,8 @@ CONNECTION_KEEP_ALIVE = 'keep-alive'
 COOKIE = 'cookie'
 SET_COOKIE = 'set-cookie'
 HOST = 'host'
+EXPECT = 'expect'
+EXPECT_100_CONTINUE = '100-continue'
 CONTENT_TYPE_MAP = {
     'html': CONTENT_TYPE_HTML_UTF8,
     'htm': CONTENT_TYPE_HTML_UTF8,
@@ -290,6 +292,7 @@ class HttpConnection():
         self._body_complete = False
         self._body_file_handle = None
         self._to_file = None
+        self._expect_continue = False
         # Config from kwargs
         self._max_headers_length = kwargs.get(
             'max_headers_length', MAX_HEADERS_LENGTH)
@@ -554,6 +557,14 @@ class HttpConnection():
             raise HttpErrorWithResponse(
                 400, "Host header is required for HTTP/1.1")
 
+        # Handle Expect: 100-continue
+        expect = self.headers_get_attribute(EXPECT, '').lower()
+        if expect == EXPECT_100_CONTINUE and self.content_length:
+            self._expect_continue = True
+            if not self._server.event_mode:
+                # Non-event mode: send 100 Continue immediately
+                self._send_100_continue()
+
         if self.content_length:
             if self.content_length > self._max_content_length:
                 raise HttpErrorWithResponse(413)
@@ -581,6 +592,13 @@ class HttpConnection():
             data = data.encode('ascii')
         self._send_buffer.extend(data)
         self.try_send()
+
+    def _send_100_continue(self):
+        """Send 100 Continue response if client expects it"""
+        if not self._expect_continue:
+            return
+        self._expect_continue = False
+        self._send('HTTP/1.1 100 Continue\r\n\r\n')
 
     def _close_file_handle(self):
         """Close file handle safely"""
@@ -707,6 +725,7 @@ class HttpConnection():
         self._streaming_events = False
         self._body_complete = False
         self._to_file = None
+        self._expect_continue = False
         self.update_activity()
 
     def close(self):
@@ -891,37 +910,71 @@ class HttpConnection():
 
         return headers
 
-    def accept_body(self, streaming=False, to_file=None):
-        """Accept incoming body data in event mode.
+    def _accept_body_common(self):
+        """Common setup for accept_body methods.
+
+        Returns:
+            int: Number of bytes already waiting in buffer.
+
+        Raises:
+            HttpError: If called outside of EVENT_HEADERS state.
+        """
+        if self._event != EVENT_HEADERS:
+            raise HttpError("accept_body() can only be called after EVENT_HEADERS")
+        self._streaming_body = True
+        self._send_100_continue()
+        return len(self._buffer)
+
+    def accept_body(self):
+        """Accept incoming body data, buffer all and receive EVENT_COMPLETE.
 
         Must be called after receiving EVENT_HEADERS to start receiving body.
-
-        Args:
-            streaming: If True, receive EVENT_DATA for each chunk.
-                If False (default), buffer all data and receive only EVENT_COMPLETE.
-            to_file: Path to file where body will be saved. Server handles
-                the upload and sends EVENT_COMPLETE when done.
+        All data is buffered internally. When complete, EVENT_COMPLETE is emitted
+        and data can be read with read_buffer().
 
         Returns:
             int: Number of bytes already waiting in buffer.
         """
-        if self._event != EVENT_HEADERS:
-            raise HttpError("accept_body() can only be called after EVENT_HEADERS")
+        return self._accept_body_common()
 
-        self._streaming_body = True
-        self._streaming_events = streaming
-        self._to_file = to_file
+    def accept_body_streaming(self):
+        """Accept incoming body data with streaming events.
 
-        if to_file:
-            try:
-                self._body_file_handle = open(to_file, 'wb')
-            except OSError as err:
-                self._error = f"Failed to open file: {err}"
-                self._event = EVENT_ERROR
-                return 0
+        Must be called after receiving EVENT_HEADERS to start receiving body.
+        Emits EVENT_DATA for each chunk received. Call read_buffer() to get data.
+        When complete, EVENT_COMPLETE is emitted.
 
-        # Return count of bytes already in buffer
-        return len(self._buffer)
+        Returns:
+            int: Number of bytes already waiting in buffer.
+        """
+        pending = self._accept_body_common()
+        self._streaming_events = True
+        return pending
+
+    def accept_body_to_file(self, path):
+        """Accept incoming body data and save directly to file.
+
+        Must be called after receiving EVENT_HEADERS to start receiving body.
+        Data is written to file as it arrives. When complete, EVENT_COMPLETE
+        is emitted. No EVENT_DATA events are sent.
+
+        Args:
+            path: Path to file where body will be saved.
+
+        Returns:
+            int: Number of bytes already waiting in buffer.
+        """
+        pending = self._accept_body_common()
+        self._to_file = path
+
+        try:
+            self._body_file_handle = open(path, 'wb')
+        except OSError as err:
+            self._error = f"Failed to open file: {err}"
+            self._event = EVENT_ERROR
+            return 0
+
+        return pending
 
     def read_buffer(self):
         """Read available data from buffer.
@@ -1119,15 +1172,19 @@ class HttpServer():
     @property
     def read_sockets(self):
         """All sockets waiting for communication, used for select"""
-        read_sockets = [con.socket for con in self._waiting_connections]
-        if self._socket:
+        read_sockets = [
+            con.socket for con in self._waiting_connections
+            if con.socket is not None]
+        if self._socket is not None:
             read_sockets.append(self._socket)
         return read_sockets
 
     @property
     def write_sockets(self):
         """All sockets with data to send, used for select"""
-        return [con.socket for con in self._waiting_connections if con.has_data_to_send]
+        return [
+            con.socket for con in self._waiting_connections
+            if con.socket is not None and con.has_data_to_send]
 
     def close(self):
         """Close HTTP server"""
@@ -1264,6 +1321,13 @@ class HttpServer():
                 return pending
 
         self.event_write(self.write_sockets)
-        read_sockets, write_sockets, _ = _select.select(
-            self.read_sockets, self.write_sockets, [], timeout)
+        try:
+            read_sockets, write_sockets, _ = _select.select(
+                self.read_sockets, self.write_sockets, [], timeout)
+        except (OSError, ValueError) as err:
+            # EBADF: socket closed concurrently
+            # ValueError: socket fileno() is -1 (closed)
+            if isinstance(err, ValueError) or err.errno == errno.EBADF:
+                return None
+            raise
         return self.process_events(read_sockets, write_sockets)
