@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "micro-uhttp"
-version = "2.0.1"
+name = "micro-http"
+version = "2.1.0"
 description = "Micro HTTP server and client for Python and MicroPython"
 readme = "README.md"
 authors = [
@@ -12,6 +12,10 @@ authors = [
 ]
 license = {text = "MIT"}
 requires-python = ">=3.7"
+dependencies = [
+    "uhttp-server>=2.1.0",
+    "uhttp-client>=2.1.0",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: Implementation :: MicroPython",
@@ -22,6 +26,3 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/pavelrevak/uhttp"
 Repository = "https://github.com/pavelrevak/uhttp"
-
-[tool.setuptools.packages.find]
-include = ["uhttp*"]
