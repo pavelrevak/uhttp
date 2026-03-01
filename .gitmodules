@@ -1,8 +1,0 @@
-[submodule "server"]
-	path = server
-	url = https://github.com/pavelrevak/uhttp-server.git
-	branch = main
-[submodule "client"]
-	path = client
-	url = https://github.com/pavelrevak/uhttp-client.git
-	branch = main

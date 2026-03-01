@@ -34,18 +34,6 @@ pip install uhttp-client
 
 For MicroPython, copy `uhttp/server.py` and/or `uhttp/client.py` from the respective repository to your device.
 
-## Repository Structure
-
-This is a meta-repository that includes both packages as git submodules:
-
-```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/pavelrevak/uhttp.git
-
-# Update submodules to latest main
-git submodule update --remote
-```
-
 ## Quick Start
 
 ### Server
@@ -73,26 +61,25 @@ with HttpClient('https://httpbin.org') as client:
 
 ## Documentation
 
-- [Server documentation](server/README.md) - HttpServer, HttpConnection, SSL, event mode
-- [Client documentation](client/README.md) - HttpClient, HttpResponse, auth, cookies
+- [Server documentation](https://github.com/pavelrevak/uhttp-server#readme)
+- [Client documentation](https://github.com/pavelrevak/uhttp-client#readme)
 
-## Testing
+## Development
+
+For local development, clone the repositories separately:
 
 ```bash
-# Create test environment
-python3.14 -m venv .venv-test
-.venv-test/bin/pip install -e ./server -e ./client
+git clone https://github.com/pavelrevak/uhttp-server.git
+git clone https://github.com/pavelrevak/uhttp-client.git
+
+# Create shared venv
+python3.14 -m venv .venv
+.venv/bin/pip install -e ./uhttp-server -e ./uhttp-client
 
 # Run tests
-.venv-test/bin/python -m unittest discover server/tests/
-.venv-test/bin/python -m unittest discover client/tests/
+.venv/bin/python -m unittest discover uhttp-server/tests/
+.venv/bin/python -m unittest discover uhttp-client/tests/
 ```
-
-## Examples
-
-See examples in each package:
-- [server/examples/](server/examples/) - HTTPS server, HTTP→HTTPS redirect, multi-input select
-- [client/examples/](client/examples/) - Basic usage, HTTPS, async with select
 
 ## License
 
