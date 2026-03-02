@@ -7,3 +7,5 @@ __pycache__
 *.pem
 *.md
 !README*.md
+/server/
+/client/
