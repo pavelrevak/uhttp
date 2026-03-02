@@ -17,8 +17,8 @@ The library is split into independent packages:
 
 | Package | Description | Install |
 |---------|-------------|---------|
-| [uhttp-server](https://github.com/pavelrevak/uhttp-server) | HTTP server with keep-alive, streaming, event mode | `pip install uhttp-server` |
-| [uhttp-client](https://github.com/pavelrevak/uhttp-client) | HTTP client with keep-alive, auth, cookies | `pip install uhttp-client` |
+| [uhttp-server](https://github.com/cortexm/uhttp-server) | HTTP server with keep-alive, streaming, event mode | `pip install uhttp-server` |
+| [uhttp-client](https://github.com/cortexm/uhttp-client) | HTTP client with keep-alive, auth, cookies | `pip install uhttp-client` |
 | micro-http | Meta-package (installs both) | `pip install micro-http` |
 
 ## Installation
@@ -61,16 +61,16 @@ with HttpClient('https://httpbin.org') as client:
 
 ## Documentation
 
-- [Server documentation](https://github.com/pavelrevak/uhttp-server#readme)
-- [Client documentation](https://github.com/pavelrevak/uhttp-client#readme)
+- [Server documentation](https://github.com/cortexm/uhttp-server#readme)
+- [Client documentation](https://github.com/cortexm/uhttp-client#readme)
 
 ## Development
 
 For local development, clone the repositories separately:
 
 ```bash
-git clone https://github.com/pavelrevak/uhttp-server.git
-git clone https://github.com/pavelrevak/uhttp-client.git
+git clone https://github.com/cortexm/uhttp-server.git
+git clone https://github.com/cortexm/uhttp-client.git
 
 # Create shared venv
 python3.14 -m venv .venv
